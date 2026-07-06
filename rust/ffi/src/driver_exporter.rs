@@ -1728,6 +1728,12 @@ extern "C" fn statement_execute_query<DriverType: Driver + 'static>(
             let reader = Box::new(reader);
             let reader = FFI_ArrowArrayStream::new(reader);
             unsafe { std::ptr::write_unaligned(out, reader) };
+            if !rows_affected.is_null() {
+                // A query does not report an affected-row count up front. ADBC's ExecuteQuery
+                // contract (adbc.h) defines `rows_affected` as the count if known, else -1;
+                // leaving the out-parameter untouched would surface the caller's stale value.
+                unsafe { std::ptr::write_unaligned(rows_affected, -1) };
+            }
         } else {
             let rows_affected_value = check_err!(statement.execute_update(), error).unwrap_or(-1);
             if !rows_affected.is_null() {
