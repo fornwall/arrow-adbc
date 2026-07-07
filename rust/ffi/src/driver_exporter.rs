@@ -19,11 +19,12 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::{CStr, CString};
 use std::hash::Hash;
 use std::os::raw::{c_char, c_int, c_void};
+use std::sync::{Arc, Mutex};
 
-use arrow_array::StructArray;
 use arrow_array::ffi::{FFI_ArrowArray, FFI_ArrowSchema, from_ffi};
 use arrow_array::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
-use arrow_schema::DataType;
+use arrow_array::{RecordBatch, RecordBatchReader, StructArray};
+use arrow_schema::{ArrowError, DataType, SchemaRef};
 
 use super::{
     FFI_AdbcConnection, FFI_AdbcDatabase, FFI_AdbcDriver, FFI_AdbcError, FFI_AdbcErrorDetail,
@@ -132,7 +133,7 @@ impl<DriverType: Driver + Default + 'static> FFIDriver for DriverType {
             StatementSetSubstraitPlan: Some(statement_set_substrait_plan::<DriverType>),
             ErrorGetDetailCount: Some(error_get_detail_count),
             ErrorGetDetail: Some(error_get_detail),
-            ErrorFromArrayStream: None, // TODO(alexandreyc): what to do with this?
+            ErrorFromArrayStream: Some(error_from_array_stream),
             DatabaseGetOption: Some(database_get_option::<DriverType>),
             DatabaseGetOptionBytes: Some(database_get_option_bytes::<DriverType>),
             DatabaseGetOptionDouble: Some(database_get_option_double::<DriverType>),
@@ -536,6 +537,175 @@ fn check_poison() -> Result<()> {
         ))
     } else {
         Ok(())
+    }
+}
+
+// Array stream export
+
+/// Slot holding the most recent [`Error`] produced by a reader while it is being
+/// iterated over the C Data Interface.
+///
+/// It is shared between the [`LastErrorReader`] (which writes to it when the
+/// wrapped reader fails) and the exported stream's private data (from which
+/// [`error_from_array_stream`] reads it). Both ends may live on different threads,
+/// hence [`Arc`] + [`Mutex`].
+type LastError = Arc<Mutex<Option<Error>>>;
+
+/// A [`RecordBatchReader`] that remembers the full [`Error`] whenever iteration
+/// yields an [`ArrowError::ExternalError`] carrying one.
+///
+/// Without this, the rich ADBC error attached by a driver during streaming is
+/// reduced to an errno plus a message string by the time it crosses the FFI
+/// boundary. Retaining the [`Error`] lets [`error_from_array_stream`] hand the
+/// full object (status, vendor code, structured details) back to a foreign
+/// driver manager via ADBC 1.1.0's `ErrorFromArrayStream`.
+struct LastErrorReader {
+    inner: Box<dyn RecordBatchReader + Send>,
+    last_error: LastError,
+}
+
+impl Iterator for LastErrorReader {
+    type Item = std::result::Result<RecordBatch, ArrowError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let item = self.inner.next();
+        if let Some(Err(ArrowError::ExternalError(err))) = &item {
+            if let Some(error) = err.downcast_ref::<Error>() {
+                *self.last_error.lock().expect("Poisoned last-error mutex") = Some(error.clone());
+            }
+        }
+        item
+    }
+}
+
+impl RecordBatchReader for LastErrorReader {
+    fn schema(&self) -> SchemaRef {
+        self.inner.schema()
+    }
+}
+
+/// Private data backing an exported [`FFI_ArrowArrayStream`].
+///
+/// The heavy lifting (schema/array export) is delegated to `inner`, an
+/// arrow-produced stream wrapping a [`LastErrorReader`]. We only interpose to
+/// keep the [`LastError`] slot reachable from [`error_from_array_stream`] and to
+/// own the [`FFI_AdbcError`] materialized from it.
+struct ExportedArrayStreamPrivateData {
+    inner: FFI_ArrowArrayStream,
+    last_error: LastError,
+    /// Materialized error returned by the most recent call to
+    /// [`error_from_array_stream`]. Kept alive here so the returned pointer stays
+    /// valid until the stream is released or `ErrorFromArrayStream` is called again.
+    ffi_error: Option<FFI_AdbcError>,
+}
+
+/// Wrap a driver-produced reader into an [`FFI_ArrowArrayStream`] that retains the
+/// last ADBC [`Error`] seen during iteration so it can be recovered via
+/// [`error_from_array_stream`].
+fn export_reader<R: RecordBatchReader + Send + 'static>(reader: R) -> FFI_ArrowArrayStream {
+    let last_error: LastError = Arc::new(Mutex::new(None));
+    let reader = LastErrorReader {
+        inner: Box::new(reader),
+        last_error: last_error.clone(),
+    };
+    let inner = FFI_ArrowArrayStream::new(Box::new(reader));
+    let private_data = Box::new(ExportedArrayStreamPrivateData {
+        inner,
+        last_error,
+        ffi_error: None,
+    });
+    FFI_ArrowArrayStream {
+        get_schema: Some(exported_stream_get_schema),
+        get_next: Some(exported_stream_get_next),
+        get_last_error: Some(exported_stream_get_last_error),
+        release: Some(exported_stream_release),
+        private_data: Box::into_raw(private_data) as *mut c_void,
+    }
+}
+
+// SAFETY: `stream` points to a stream produced by `export_reader`, hence its
+// `private_data` is a valid `ExportedArrayStreamPrivateData`.
+unsafe fn exported_stream_private_data<'a>(
+    stream: *mut FFI_ArrowArrayStream,
+) -> &'a mut ExportedArrayStreamPrivateData {
+    &mut *((*stream).private_data as *mut ExportedArrayStreamPrivateData)
+}
+
+unsafe extern "C" fn exported_stream_get_schema(
+    stream: *mut FFI_ArrowArrayStream,
+    out: *mut FFI_ArrowSchema,
+) -> c_int {
+    let inner = &mut exported_stream_private_data(stream).inner;
+    (inner.get_schema.unwrap())(inner, out)
+}
+
+unsafe extern "C" fn exported_stream_get_next(
+    stream: *mut FFI_ArrowArrayStream,
+    out: *mut FFI_ArrowArray,
+) -> c_int {
+    let inner = &mut exported_stream_private_data(stream).inner;
+    (inner.get_next.unwrap())(inner, out)
+}
+
+unsafe extern "C" fn exported_stream_get_last_error(
+    stream: *mut FFI_ArrowArrayStream,
+) -> *const c_char {
+    let inner = &mut exported_stream_private_data(stream).inner;
+    (inner.get_last_error.unwrap())(inner)
+}
+
+unsafe extern "C" fn exported_stream_release(stream: *mut FFI_ArrowArrayStream) {
+    if stream.is_null() {
+        return;
+    }
+    let stream = &mut *stream;
+    if !stream.private_data.is_null() {
+        // SAFETY: `private_data` was obtained from `Box::into_raw` in `export_reader`.
+        // Dropping the box releases the inner stream (via its own `Drop`) and the
+        // materialized `FFI_AdbcError` (via `FFI_AdbcError::drop`).
+        drop(Box::from_raw(
+            stream.private_data as *mut ExportedArrayStreamPrivateData,
+        ));
+        stream.private_data = std::ptr::null_mut();
+    }
+    stream.release = None;
+}
+
+/// Recover the full [`FFI_AdbcError`] from a stream produced by [`export_reader`]
+/// after iteration failed. Implements ADBC 1.1.0's `ErrorFromArrayStream`.
+unsafe extern "C" fn error_from_array_stream(
+    stream: *mut FFI_ArrowArrayStream,
+    status: *mut AdbcStatusCode,
+) -> *const FFI_AdbcError {
+    // Per the ADBC contract this is only ever called on a stream this driver
+    // produced, i.e. one whose `private_data` is an `ExportedArrayStreamPrivateData`.
+    // A released stream has a null `private_data` and offers no error.
+    if stream.is_null() || (*stream).private_data.is_null() {
+        return std::ptr::null();
+    }
+
+    let private_data = exported_stream_private_data(stream);
+    let error = private_data
+        .last_error
+        .lock()
+        .expect("Poisoned last-error mutex")
+        .clone();
+
+    match error {
+        None => std::ptr::null(),
+        Some(error) => {
+            let status_code: AdbcStatusCode = error.status.into();
+            let ffi_error = FFI_AdbcError::try_from(error).unwrap_or_else(Into::into);
+            // Store it so the returned pointer outlives this call. Any previously
+            // materialized error is dropped (and released) here, which matches the
+            // ADBC contract that the returned pointer is valid only until the next
+            // call or until the stream is released.
+            let ffi_error = private_data.ffi_error.insert(ffi_error);
+            if !status.is_null() {
+                std::ptr::write_unaligned(status, status_code);
+            }
+            ffi_error as *const FFI_AdbcError
+        }
     }
 }
 
@@ -1116,8 +1286,7 @@ extern "C" fn connection_get_table_types<DriverType: Driver + 'static>(
         let connection = check_err!(exported.try_connection(), error);
 
         let reader = check_err!(connection.get_table_types(), error);
-        let reader = Box::new(reader);
-        let reader = FFI_ArrowArrayStream::new(reader);
+        let reader = export_reader(reader);
         unsafe { std::ptr::write_unaligned(out, reader) };
 
         ADBC_STATUS_OK
@@ -1184,8 +1353,7 @@ extern "C" fn connection_get_info<DriverType: Driver + 'static>(
         };
 
         let reader = check_err!(connection.get_info(info_codes), error);
-        let reader = Box::new(reader);
-        let reader = FFI_ArrowArrayStream::new(reader);
+        let reader = export_reader(reader);
         unsafe { std::ptr::write_unaligned(out, reader) };
 
         ADBC_STATUS_OK
@@ -1262,8 +1430,7 @@ extern "C" fn connection_get_statistic_names<DriverType: Driver + 'static>(
         let connection = check_err!(exported.try_connection(), error);
 
         let reader = check_err!(connection.get_statistic_names(), error);
-        let reader = Box::new(reader);
-        let reader = FFI_ArrowArrayStream::new(reader);
+        let reader = export_reader(reader);
         unsafe { std::ptr::write_unaligned(out, reader) };
 
         ADBC_STATUS_OK
@@ -1291,8 +1458,7 @@ extern "C" fn connection_read_partition<DriverType: Driver + 'static>(
         let partition =
             unsafe { std::slice::from_raw_parts(serialized_partition, serialized_length) };
         let reader = check_err!(connection.read_partition(partition), error);
-        let reader = Box::new(reader);
-        let reader = FFI_ArrowArrayStream::new(reader);
+        let reader = export_reader(reader);
         unsafe { std::ptr::write_unaligned(out, reader) };
 
         ADBC_STATUS_OK
@@ -1325,8 +1491,7 @@ extern "C" fn connection_get_statistics<DriverType: Driver + 'static>(
 
         let reader = connection.get_statistics(catalog, db_schema, table_name, approximate);
         let reader = check_err!(reader, error);
-        let reader = Box::new(reader);
-        let reader = FFI_ArrowArrayStream::new(reader);
+        let reader = export_reader(reader);
         unsafe { std::ptr::write_unaligned(out, reader) };
 
         ADBC_STATUS_OK
@@ -1382,8 +1547,7 @@ extern "C" fn connection_get_objects<DriverType: Driver + 'static>(
             column_name,
         );
         let reader = check_err!(reader, error);
-        let reader = Box::new(reader);
-        let reader = FFI_ArrowArrayStream::new(reader);
+        let reader = export_reader(reader);
         unsafe { std::ptr::write_unaligned(out, reader) };
 
         ADBC_STATUS_OK
@@ -1725,8 +1889,7 @@ extern "C" fn statement_execute_query<DriverType: Driver + 'static>(
 
         if !out.is_null() {
             let reader = check_err!(statement.execute(), error);
-            let reader = Box::new(reader);
-            let reader = FFI_ArrowArrayStream::new(reader);
+            let reader = export_reader(reader);
             unsafe { std::ptr::write_unaligned(out, reader) };
         } else {
             let rows_affected_value = check_err!(statement.execute_update(), error).unwrap_or(-1);
