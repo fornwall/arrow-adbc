@@ -153,6 +153,21 @@ class DriverQuirks {
     return std::nullopt;
   }
 
+  /// DDL for TestSqlBind's two-column table (col1 integer, col2 text).
+  virtual std::optional<std::string> BindTestTableDdl(std::string_view name) const {
+    return std::nullopt;
+  }
+  /// DDL for TestSqlQueryEmpty's single-column table (FOO integer).
+  virtual std::optional<std::string> QueryEmptyTableDdl(std::string_view name) const {
+    return std::nullopt;
+  }
+  /// DDL for the single-int-column tables in TestSqlQueryRowsAffectedDelete
+  /// (column `foo`) and TestSqlQueryInsertRollback (column `a`).
+  virtual std::optional<std::string> SingleIntColumnTableDdl(
+      std::string_view name, std::string_view column) const {
+    return std::nullopt;
+  }
+
   /// \brief Return the SQL to reference the bind parameter of the given index
   virtual std::string BindParameter(int index) const { return "?"; }
 
