@@ -184,6 +184,11 @@ jobs:
         run: |
           ./ci/scripts/remamba.sh install -c conda-forge \
             --file ci/conda_env_cpp.txt
+      - name: Force newest LLVM toolchain (macOS sanitizer-hang test)
+        if: matrix.os == 'macos-latest'
+        run: |
+          ./ci/scripts/remamba.sh install -c conda-forge \
+            "clang>=22" "clangxx>=22" "compiler-rt>=22" "llvm-tools>=22"
       - name: Work around ASAN issue (GH-1617)
         if: matrix.os == 'ubuntu-latest'
         run: |
