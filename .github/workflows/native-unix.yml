@@ -197,6 +197,7 @@ jobs:
           BUILD_DRIVER_POSTGRESQL: "1"
           BUILD_DRIVER_SQLITE: "1"
           ADBC_DRIVER_MANAGER_USER_CONFIG_TEST: "1"
+          ADBC_USE_UBSAN: ${{ matrix.os == 'macos-latest' && 'OFF' || 'ON' }}
         run: |
           # Ensure the CONDA_PREFIX searching in driver manager is tested
           export CONDA_BUILD=1
