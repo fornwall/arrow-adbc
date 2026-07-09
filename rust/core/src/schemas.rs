@@ -17,6 +17,8 @@
 
 //! Schemas and data types that appear through ADBC.
 
+pub mod builder;
+
 use std::sync::{Arc, LazyLock};
 
 use arrow_schema::{DataType, Field, Schema, SchemaRef, UnionFields, UnionMode};

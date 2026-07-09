@@ -29,7 +29,6 @@ adbc_core.workspace = true
 adbc_ffi.workspace = true
 adbc_driver_manager.workspace = true
 arrow-array.workspace = true
-arrow-buffer.workspace = true
 arrow-schema.workspace = true
 
 [dev-dependencies]
