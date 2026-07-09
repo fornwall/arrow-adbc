@@ -68,6 +68,12 @@ main() {
     export DYLD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${install_dir}/lib"
     export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:${install_dir}/lib"
 
+    # LeakSanitizer is unsupported on macOS/arm64 and leaving it enabled adds
+    # ASan-runtime surface; disable leak detection here to match python_test.sh
+    # and validate.sh. (Investigating intermittent ASan test hangs on the
+    # macos-latest runners.)
+    export ASAN_OPTIONS="detect_leaks=0${ASAN_OPTIONS:+:${ASAN_OPTIONS}}"
+
     test_project "${build_dir}"
 }
 
