@@ -182,13 +182,15 @@ jobs:
           use-mamba: true
       - name: Install Dependencies
         run: |
+          # On macos-latest, force the newest LLVM stack (sanitizer-hang test)
+          # in the SAME solve so the compiler-activation packages stay
+          # consistent with the runtime, instead of re-solving after the fact.
+          extra=()
+          if [ "${{ matrix.os }}" = "macos-latest" ]; then
+            extra=("clang>=22" "clangxx>=22" "compiler-rt>=22" "llvm-tools>=22")
+          fi
           ./ci/scripts/remamba.sh install -c conda-forge \
-            --file ci/conda_env_cpp.txt
-      - name: Force newest LLVM toolchain (macOS sanitizer-hang test)
-        if: matrix.os == 'macos-latest'
-        run: |
-          ./ci/scripts/remamba.sh install -c conda-forge \
-            "clang>=22" "clangxx>=22" "compiler-rt>=22" "llvm-tools>=22"
+            --file ci/conda_env_cpp.txt "${extra[@]}"
       - name: Work around ASAN issue (GH-1617)
         if: matrix.os == 'ubuntu-latest'
         run: |
