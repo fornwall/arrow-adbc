@@ -467,6 +467,7 @@ class StatementTest {
   void TestSqlQueryCancel();
   void TestSqlQueryErrors();
   void TestSqlQueryTrailingSemicolons();
+  void TestSqlQueryIncrementalDefault();
   void TestSqlQueryRowsAffectedDelete();
   void TestSqlQueryRowsAffectedDeleteStream();
 
@@ -588,6 +589,7 @@ void StatementTest::TestSqlIngestType(ArrowType type,
   TEST_F(FIXTURE, SqlQueryCancel) { TestSqlQueryCancel(); }                             \
   TEST_F(FIXTURE, SqlQueryErrors) { TestSqlQueryErrors(); }                             \
   TEST_F(FIXTURE, SqlQueryTrailingSemicolons) { TestSqlQueryTrailingSemicolons(); }     \
+  TEST_F(FIXTURE, SqlQueryIncrementalDefault) { TestSqlQueryIncrementalDefault(); }     \
   TEST_F(FIXTURE, SqlQueryRowsAffectedDelete) { TestSqlQueryRowsAffectedDelete(); }     \
   TEST_F(FIXTURE, SqlQueryRowsAffectedDeleteStream) {                                   \
     TestSqlQueryRowsAffectedDeleteStream();                                             \
