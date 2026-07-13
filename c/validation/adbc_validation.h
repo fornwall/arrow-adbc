@@ -213,6 +213,12 @@ class DriverQuirks {
   /// \brief Whether AdbcStatementExecutePartitions should work
   virtual bool supports_partitioned_data() const { return false; }
 
+  /// \brief Whether ADBC_STATEMENT_OPTION_INCREMENTAL can be set to its
+  ///   default value of ADBC_OPTION_VALUE_DISABLED (drivers should accept
+  ///   this as a no-op even without incremental execution support, but some
+  ///   third-party drivers reject the option entirely)
+  virtual bool supports_incremental_option_default() const { return true; }
+
   /// \brief Whether transaction methods are implemented
   virtual bool supports_transactions() const { return true; }
 
@@ -461,6 +467,7 @@ class StatementTest {
   void TestSqlQueryCancel();
   void TestSqlQueryErrors();
   void TestSqlQueryTrailingSemicolons();
+  void TestSqlQueryIncrementalDefault();
   void TestSqlQueryRowsAffectedDelete();
   void TestSqlQueryRowsAffectedDeleteStream();
 
@@ -580,6 +587,7 @@ void StatementTest::TestSqlIngestType(ArrowType type,
   TEST_F(FIXTURE, SqlQueryCancel) { TestSqlQueryCancel(); }                             \
   TEST_F(FIXTURE, SqlQueryErrors) { TestSqlQueryErrors(); }                             \
   TEST_F(FIXTURE, SqlQueryTrailingSemicolons) { TestSqlQueryTrailingSemicolons(); }     \
+  TEST_F(FIXTURE, SqlQueryIncrementalDefault) { TestSqlQueryIncrementalDefault(); }     \
   TEST_F(FIXTURE, SqlQueryRowsAffectedDelete) { TestSqlQueryRowsAffectedDelete(); }     \
   TEST_F(FIXTURE, SqlQueryRowsAffectedDeleteStream) {                                   \
     TestSqlQueryRowsAffectedDeleteStream();                                             \

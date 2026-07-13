@@ -53,6 +53,7 @@ class DuckDbQuirks : public adbc_validation::DriverQuirks {
   bool supports_dynamic_parameter_binding() const override { return false; }
   bool supports_get_sql_info() const override { return false; }
   bool supports_get_objects() const override { return false; }
+  bool supports_incremental_option_default() const override { return false; }
   bool supports_rows_affected() const override { return false; }
   bool supports_transactions() const override { return false; }
 };
