@@ -245,6 +245,10 @@ class DriverQuirks {
   /// \brief Whether dynamic parameter bindings are supported for prepare
   virtual bool supports_dynamic_parameter_binding() const { return true; }
 
+  /// \brief Whether executing a statement with zero bound rows yields a
+  ///   result with zero rows
+  virtual bool supports_bind_zero_rows() const { return true; }
+
   /// \brief Whether ExecuteQuery sets rows_affected appropriately
   virtual bool supports_rows_affected() const { return true; }
 
@@ -456,6 +460,7 @@ class StatementTest {
   void TestSqlPrepareErrorParamCountMismatch();
 
   void TestSqlBind();
+  void TestSqlBindZeroRows();
 
   void TestSqlQueryEmpty();
   void TestSqlQueryInts();
@@ -578,6 +583,7 @@ void StatementTest::TestSqlIngestType(ArrowType type,
     TestSqlPrepareErrorParamCountMismatch();                                            \
   }                                                                                     \
   TEST_F(FIXTURE, SqlBind) { TestSqlBind(); }                                           \
+  TEST_F(FIXTURE, SqlBindZeroRows) { TestSqlBindZeroRows(); }                           \
   TEST_F(FIXTURE, SqlQueryEmpty) { TestSqlQueryEmpty(); }                               \
   TEST_F(FIXTURE, SqlQueryInts) { TestSqlQueryInts(); }                                 \
   TEST_F(FIXTURE, SqlQueryFloats) { TestSqlQueryFloats(); }                             \

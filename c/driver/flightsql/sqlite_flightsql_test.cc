@@ -119,6 +119,12 @@ class SqliteFlightSqlQuirks : public adbc_validation::DriverQuirks {
   bool supports_get_objects() const override { return true; }
   bool supports_partitioned_data() const override { return true; }
   bool supports_dynamic_parameter_binding() const override { return true; }
+  // Even with the arrow-go client sending zero-row bindings
+  // (https://github.com/fornwall/arrow-go/pull/3), the example server cannot
+  // infer concrete result column types without any bound values and reports
+  // SQLite's dense-union fallback ("+ud:0,1,2") where an execution with a
+  // bound row reports the concrete type, failing the schema comparison.
+  bool supports_bind_zero_rows() const override { return false; }
   std::string catalog() const override { return "main"; }
 };
 
