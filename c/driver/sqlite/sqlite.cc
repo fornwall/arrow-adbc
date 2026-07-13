@@ -1250,6 +1250,16 @@ class SqliteStatement : public driver::Statement<SqliteStatement> {
     } else if (key == kStatementOptionBindByName) {
       UNWRAP_RESULT(bind_by_name_, value.AsBool());
       return status::Ok();
+    } else if (key == ADBC_STATEMENT_OPTION_INCREMENTAL) {
+      // Incremental execution is not supported, but the option defaults to
+      // disabled, so accept an explicit "disabled" as a no-op.
+      bool incremental;
+      UNWRAP_RESULT(incremental, value.AsBool());
+      if (incremental) {
+        return status::fmt::NotImplemented("{} Incremental execution is not supported",
+                                           kErrorPrefix);
+      }
+      return status::Ok();
     }
     return Base::SetOptionImpl(key, std::move(value));
   }
