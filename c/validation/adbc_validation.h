@@ -455,6 +455,7 @@ class StatementTest {
 
   void TestSqlBind();
   void TestSqlBindZeroRows();
+  void TestSqlBindNullType();
 
   void TestSqlQueryEmpty();
   void TestSqlQueryInts();
@@ -578,6 +579,7 @@ void StatementTest::TestSqlIngestType(ArrowType type,
   }                                                                                     \
   TEST_F(FIXTURE, SqlBind) { TestSqlBind(); }                                           \
   TEST_F(FIXTURE, SqlBindZeroRows) { TestSqlBindZeroRows(); }                           \
+  TEST_F(FIXTURE, SqlBindNullType) { TestSqlBindNullType(); }                           \
   TEST_F(FIXTURE, SqlQueryEmpty) { TestSqlQueryEmpty(); }                               \
   TEST_F(FIXTURE, SqlQueryInts) { TestSqlQueryInts(); }                                 \
   TEST_F(FIXTURE, SqlQueryFloats) { TestSqlQueryFloats(); }                             \

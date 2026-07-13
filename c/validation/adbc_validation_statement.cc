@@ -2313,6 +2313,49 @@ void StatementTest::TestSqlBindZeroRows() {
   }
 }
 
+void StatementTest::TestSqlBindNullType() {
+  if (!quirks()->supports_dynamic_parameter_binding()) {
+    GTEST_SKIP();
+  }
+
+  ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
+  std::string query = "SELECT " + quirks()->BindParameter(0);
+  ASSERT_THAT(AdbcStatementSetSqlQuery(&statement, query.c_str(), &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementPrepare(&statement, &error), IsOkStatus(&error));
+
+  // GetParameterSchema reports a parameter whose type cannot be determined
+  // as NA (null type), so a driver must accept a bind batch built from that
+  // schema: a null-typed (all-NULL) parameter column.
+  Handle<struct ArrowSchema> schema;
+  Handle<struct ArrowArray> array;
+  struct ArrowError na_error;
+  ASSERT_THAT(MakeSchema(&schema.value, {{"nulls", NANOARROW_TYPE_NA}}), IsOkErrno());
+  ASSERT_THAT(MakeBatch<int64_t>(&schema.value, &array.value, &na_error,
+                                 {std::nullopt, std::nullopt}),
+              IsOkErrno());
+  ASSERT_THAT(AdbcStatementBind(&statement, &array.value, &schema.value, &error),
+              IsOkStatus(&error));
+
+  StreamReader reader;
+  ASSERT_THAT(AdbcStatementExecuteQuery(&statement, &reader.stream.value,
+                                        &reader.rows_affected, &error),
+              IsOkStatus(&error));
+  ASSERT_NO_FATAL_FAILURE(reader.GetSchema());
+  ASSERT_EQ(1, reader.schema->n_children);
+
+  int64_t nrows = 0;
+  while (true) {
+    ASSERT_NO_FATAL_FAILURE(reader.Next());
+    if (!reader.array->release) break;
+    for (int64_t row = 0; row < reader.array->length; row++) {
+      EXPECT_TRUE(ArrowArrayViewIsNull(reader.array_view->children[0], row));
+    }
+    nrows += reader.array->length;
+  }
+  ASSERT_EQ(2, nrows);
+}
+
 void StatementTest::TestSqlQueryEmpty() {
   ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
 
