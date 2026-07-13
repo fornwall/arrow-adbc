@@ -298,6 +298,7 @@ class ConnectionTest {
   void TestAutocommitDefault();
 
   void TestAutocommitToggle();
+  void TestAutocommitIntRoundTrip();
 
   void TestMetadataCurrentCatalog();
   void TestMetadataCurrentDbSchema();
@@ -335,6 +336,7 @@ class ConnectionTest {
   TEST_F(FIXTURE, Concurrent) { TestConcurrent(); }                                     \
   TEST_F(FIXTURE, AutocommitDefault) { TestAutocommitDefault(); }                       \
   TEST_F(FIXTURE, AutocommitToggle) { TestAutocommitToggle(); }                         \
+  TEST_F(FIXTURE, AutocommitIntRoundTrip) { TestAutocommitIntRoundTrip(); }             \
   TEST_F(FIXTURE, MetadataCurrentCatalog) { TestMetadataCurrentCatalog(); }             \
   TEST_F(FIXTURE, MetadataCurrentDbSchema) { TestMetadataCurrentDbSchema(); }           \
   TEST_F(FIXTURE, MetadataGetInfo) { TestMetadataGetInfo(); }                           \
