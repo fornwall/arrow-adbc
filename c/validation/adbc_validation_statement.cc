@@ -2255,6 +2255,64 @@ void StatementTest::TestSqlBind() {
   }
 }
 
+void StatementTest::TestSqlBindZeroRows() {
+  if (!quirks()->supports_dynamic_parameter_binding()) {
+    GTEST_SKIP();
+  }
+
+  ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
+  std::string query = "SELECT " + quirks()->BindParameter(0);
+  ASSERT_THAT(AdbcStatementSetSqlQuery(&statement, query.c_str(), &error),
+              IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementPrepare(&statement, &error), IsOkStatus(&error));
+
+  Handle<struct ArrowSchema> schema;
+  Handle<struct ArrowArray> array;
+  struct ArrowError na_error;
+
+  // Execute once with a single bound row to learn the result schema.
+  int64_t n_children = -1;
+  ASSERT_THAT(MakeSchema(&schema.value, {{"int64s", NANOARROW_TYPE_INT64}}), IsOkErrno());
+  ASSERT_THAT(MakeBatch<int64_t>(&schema.value, &array.value, &na_error, {42}),
+              IsOkErrno());
+  ASSERT_THAT(AdbcStatementBind(&statement, &array.value, &schema.value, &error),
+              IsOkStatus(&error));
+  {
+    StreamReader reader;
+    ASSERT_THAT(AdbcStatementExecuteQuery(&statement, &reader.stream.value,
+                                          &reader.rows_affected, &error),
+                IsOkStatus(&error));
+    ASSERT_NO_FATAL_FAILURE(reader.GetSchema());
+    n_children = reader.schema->n_children;
+    ASSERT_GT(n_children, 0);
+    while (true) {
+      ASSERT_NO_FATAL_FAILURE(reader.Next());
+      if (!reader.array->release) break;
+    }
+  }
+
+  // Executing the same query with zero bound rows must report the same
+  // result schema, with no rows.
+  ASSERT_THAT(MakeSchema(&schema.value, {{"int64s", NANOARROW_TYPE_INT64}}), IsOkErrno());
+  ASSERT_THAT(MakeBatch<int64_t>(&schema.value, &array.value, &na_error, {}),
+              IsOkErrno());
+  ASSERT_THAT(AdbcStatementBind(&statement, &array.value, &schema.value, &error),
+              IsOkStatus(&error));
+  {
+    StreamReader reader;
+    ASSERT_THAT(AdbcStatementExecuteQuery(&statement, &reader.stream.value,
+                                          &reader.rows_affected, &error),
+                IsOkStatus(&error));
+    ASSERT_NO_FATAL_FAILURE(reader.GetSchema());
+    EXPECT_EQ(n_children, reader.schema->n_children);
+    while (true) {
+      ASSERT_NO_FATAL_FAILURE(reader.Next());
+      if (!reader.array->release) break;
+      EXPECT_EQ(0, reader.array->length);
+    }
+  }
+}
+
 void StatementTest::TestSqlQueryEmpty() {
   ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
 
