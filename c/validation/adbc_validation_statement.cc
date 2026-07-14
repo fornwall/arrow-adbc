@@ -151,10 +151,10 @@ void StatementTest::TestSqlIngestType(SchemaField field,
   ASSERT_THAT(rows_affected,
               ::testing::AnyOf(::testing::Eq(values.size()), ::testing::Eq(-1)));
 
+  std::string round_trip_query = quirks()->IngestSelectRoundTripQuery(
+      "col", "bulk_ingest", "\"col\" ASC NULLS FIRST");
   ASSERT_THAT(
-      AdbcStatementSetSqlQuery(
-          &statement, "SELECT * FROM \"bulk_ingest\" ORDER BY \"col\" ASC NULLS FIRST",
-          &error),
+      AdbcStatementSetSqlQuery(&statement, round_trip_query.c_str(), &error),
       IsOkStatus(&error));
   {
     StreamReader reader;
@@ -363,10 +363,10 @@ void StatementTest::TestSqlIngestTemporalType(const char* timezone) {
   ASSERT_THAT(rows_affected,
               ::testing::AnyOf(::testing::Eq(values.size()), ::testing::Eq(-1)));
 
+  std::string round_trip_query = quirks()->IngestSelectRoundTripQuery(
+      "col", "bulk_ingest", "\"col\" ASC NULLS FIRST");
   ASSERT_THAT(
-      AdbcStatementSetSqlQuery(
-          &statement, "SELECT * FROM \"bulk_ingest\" ORDER BY \"col\" ASC NULLS FIRST",
-          &error),
+      AdbcStatementSetSqlQuery(&statement, round_trip_query.c_str(), &error),
       IsOkStatus(&error));
   {
     StreamReader reader;
@@ -510,10 +510,10 @@ void StatementTest::TestSqlIngestInterval() {
   ASSERT_THAT(rows_affected,
               ::testing::AnyOf(::testing::Eq(values.size()), ::testing::Eq(-1)));
 
+  std::string round_trip_query = quirks()->IngestSelectRoundTripQuery(
+      "col", "bulk_ingest", "\"col\" ASC NULLS FIRST");
   ASSERT_THAT(
-      AdbcStatementSetSqlQuery(
-          &statement, "SELECT * FROM \"bulk_ingest\" ORDER BY \"col\" ASC NULLS FIRST",
-          &error),
+      AdbcStatementSetSqlQuery(&statement, round_trip_query.c_str(), &error),
       IsOkStatus(&error));
   {
     StreamReader reader;
@@ -1044,10 +1044,10 @@ void StatementTest::TestSqlIngestMultipleConnections() {
     ASSERT_THAT(AdbcConnectionInit(&connection2, &database, &error), IsOkStatus(&error));
     ASSERT_THAT(AdbcStatementNew(&connection2, &statement, &error), IsOkStatus(&error));
 
+    std::string round_trip_query = quirks()->IngestSelectRoundTripQuery(
+        "int64s", "bulk_ingest", "\"int64s\" DESC NULLS LAST");
     ASSERT_THAT(
-        AdbcStatementSetSqlQuery(
-            &statement,
-            "SELECT * FROM \"bulk_ingest\" ORDER BY \"int64s\" DESC NULLS LAST", &error),
+        AdbcStatementSetSqlQuery(&statement, round_trip_query.c_str(), &error),
         IsOkStatus(&error));
 
     {
@@ -1088,10 +1088,10 @@ void StatementTest::TestSqlIngestSample() {
               IsOkStatus(&error));
 
   ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
+  std::string round_trip_query = quirks()->IngestSelectRoundTripQuery(
+      "int64s, strings", "bulk_ingest", "int64s ASC NULLS FIRST");
   ASSERT_THAT(
-      AdbcStatementSetSqlQuery(
-          &statement, "SELECT * FROM \"bulk_ingest\" ORDER BY int64s ASC NULLS FIRST",
-          &error),
+      AdbcStatementSetSqlQuery(&statement, round_trip_query.c_str(), &error),
       IsOkStatus(&error));
   StreamReader reader;
   ASSERT_THAT(AdbcStatementExecuteQuery(&statement, &reader.stream.value,

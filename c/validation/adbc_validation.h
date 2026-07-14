@@ -185,6 +185,20 @@ class DriverQuirks {
     return out;
   }
 
+  /// \brief The SELECT used to read ingested rows back during validation.
+  /// `columns` is the comma-separated list of ingested column names to project,
+  /// `table` the target table, `order_by` the ORDER BY clause body. Defaults to
+  /// `SELECT * FROM "table" ORDER BY <order_by>` (matching the historical query).
+  /// Drivers whose create-mode ingest adds extra columns (e.g. a synthetic
+  /// primary key) or that use a different identifier-quoting dialect override
+  /// this to project only `columns` with their own quoting.
+  virtual std::string IngestSelectRoundTripQuery(std::string_view columns,
+                                                 std::string_view table,
+                                                 std::string_view order_by) const {
+    return "SELECT * FROM \"" + std::string(table) + "\" ORDER BY " +
+           std::string(order_by);
+  }
+
   /// \brief Whether bulk ingest is supported
   virtual bool supports_bulk_ingest(const char* mode) const { return true; }
 
