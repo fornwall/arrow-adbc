@@ -726,9 +726,9 @@ void StatementTest::TestSqlIngestAppend() {
 
   // Read data back
   {
-    std::string select_query = quirks()->RewriteSql(
-        "StatementTest::TestSqlIngestAppend::select-bulk-ingest",
-        "SELECT * FROM " + quirks()->QuoteIdentifier("bulk_ingest"));
+    std::string select_query =
+        quirks()->RewriteSql("StatementTest::TestSqlIngestAppend::select-bulk-ingest",
+                             "SELECT * FROM " + quirks()->QuoteIdentifier("bulk_ingest"));
     ASSERT_THAT(AdbcStatementSetSqlQuery(&statement, select_query.c_str(), &error),
                 IsOkStatus(&error));
   }
@@ -790,9 +790,9 @@ void StatementTest::TestSqlIngestReplace() {
 
   // Read data back
   {
-    std::string select_query = quirks()->RewriteSql(
-        "StatementTest::TestSqlIngestReplace::select-bulk-ingest",
-        "SELECT * FROM " + quirks()->QuoteIdentifier("bulk_ingest"));
+    std::string select_query =
+        quirks()->RewriteSql("StatementTest::TestSqlIngestReplace::select-bulk-ingest",
+                             "SELECT * FROM " + quirks()->QuoteIdentifier("bulk_ingest"));
     ASSERT_THAT(AdbcStatementSetSqlQuery(&statement, select_query.c_str(), &error),
                 IsOkStatus(&error));
   }
@@ -840,9 +840,9 @@ void StatementTest::TestSqlIngestReplace() {
 
   // Read data back
   {
-    std::string select_query = quirks()->RewriteSql(
-        "StatementTest::TestSqlIngestReplace::select-bulk-ingest",
-        "SELECT * FROM " + quirks()->QuoteIdentifier("bulk_ingest"));
+    std::string select_query =
+        quirks()->RewriteSql("StatementTest::TestSqlIngestReplace::select-bulk-ingest",
+                             "SELECT * FROM " + quirks()->QuoteIdentifier("bulk_ingest"));
     ASSERT_THAT(AdbcStatementSetSqlQuery(&statement, select_query.c_str(), &error),
                 IsOkStatus(&error));
   }
@@ -1116,10 +1116,10 @@ void StatementTest::TestSqlIngestSample() {
 
   ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
   {
-    std::string select_query = quirks()->RewriteSql(
-        "StatementTest::TestSqlIngestSample::select-bulk-ingest",
-        "SELECT * FROM " + quirks()->QuoteIdentifier("bulk_ingest") +
-            " ORDER BY int64s ASC NULLS FIRST");
+    std::string select_query =
+        quirks()->RewriteSql("StatementTest::TestSqlIngestSample::select-bulk-ingest",
+                             "SELECT * FROM " + quirks()->QuoteIdentifier("bulk_ingest") +
+                                 " ORDER BY int64s ASC NULLS FIRST");
     ASSERT_THAT(AdbcStatementSetSqlQuery(&statement, select_query.c_str(), &error),
                 IsOkStatus(&error));
   }
@@ -2031,10 +2031,10 @@ void StatementTest::TestSqlPrepareUpdate() {
               IsOkStatus(&error));
 
   // Prepare
-  std::string query = quirks()->RewriteSql(
-      "StatementTest::TestSqlPrepareUpdate::insert-bulk-ingest",
-      "INSERT INTO " + quirks()->QuoteIdentifier("bulk_ingest") + " VALUES (" +
-          quirks()->BindParameter(0) + ")");
+  std::string query =
+      quirks()->RewriteSql("StatementTest::TestSqlPrepareUpdate::insert-bulk-ingest",
+                           "INSERT INTO " + quirks()->QuoteIdentifier("bulk_ingest") +
+                               " VALUES (" + quirks()->BindParameter(0) + ")");
   ASSERT_THAT(AdbcStatementSetSqlQuery(&statement, query.c_str(), &error),
               IsOkStatus(&error));
   ASSERT_THAT(AdbcStatementPrepare(&statement, &error), IsOkStatus(&error));
@@ -2051,9 +2051,9 @@ void StatementTest::TestSqlPrepareUpdate() {
 
   // Read data back
   {
-    std::string select_query = quirks()->RewriteSql(
-        "StatementTest::TestSqlPrepareUpdate::select-bulk-ingest",
-        "SELECT * FROM " + quirks()->QuoteIdentifier("bulk_ingest"));
+    std::string select_query =
+        quirks()->RewriteSql("StatementTest::TestSqlPrepareUpdate::select-bulk-ingest",
+                             "SELECT * FROM " + quirks()->QuoteIdentifier("bulk_ingest"));
     ASSERT_THAT(AdbcStatementSetSqlQuery(&statement, select_query.c_str(), &error),
                 IsOkStatus(&error));
   }
@@ -2264,10 +2264,10 @@ void StatementTest::TestSqlBind() {
       &schema.value, &array.value, &na_error, int_values, string_values);
   ASSERT_THAT(batch_result, IsOkErrno());
 
-  auto insert_query = quirks()->RewriteSql(
-      "StatementTest::TestSqlBind::insert-bindtest",
-      std::string("INSERT INTO bindtest VALUES (") + quirks()->BindParameter(0) + ", " +
-          quirks()->BindParameter(1) + ")");
+  auto insert_query = quirks()->RewriteSql("StatementTest::TestSqlBind::insert-bindtest",
+                                           std::string("INSERT INTO bindtest VALUES (") +
+                                               quirks()->BindParameter(0) + ", " +
+                                               quirks()->BindParameter(1) + ")");
   ASSERT_THAT(AdbcStatementSetSqlQuery(&statement, insert_query.c_str(), &error),
               IsOkStatus(&error));
   ASSERT_THAT(AdbcStatementPrepare(&statement, &error), IsOkStatus(&error));
