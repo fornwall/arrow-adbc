@@ -16,6 +16,7 @@
 // under the License.
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use arrow_array::{RecordBatch, RecordBatchReader};
 use arrow_schema::Schema;
@@ -42,6 +43,19 @@ pub trait Optionable {
 
     /// Get a float option value by key.
     fn get_option_double(&self, key: Self::Option) -> Result<f64>;
+}
+
+/// A shareable handle that cancels an in-progress operation.
+///
+/// Unlike [Connection::cancel] and [Statement::cancel], which take `&mut
+/// self`, a token is `Send + Sync` and takes `&self`, so it can be invoked
+/// from another thread while a call like [Statement::execute] is in progress
+/// on the object it was obtained from. This is the concurrency the ADBC C API
+/// guarantees for `AdbcConnectionCancel`/`AdbcStatementCancel` ("this must
+/// always be thread-safe (other operations are not)").
+pub trait CancelToken: Send + Sync {
+    /// Cancel the in-progress operation.
+    fn cancel(&self) -> Result<()>;
 }
 
 /// A handle to an ADBC driver.
@@ -96,6 +110,17 @@ pub trait Connection: Optionable<Option = OptionConnection> {
 
     /// Cancel the in-progress operation on a connection.
     fn cancel(&mut self) -> Result<()>;
+
+    /// Get a shareable handle that cancels the in-progress operation on this
+    /// connection.
+    ///
+    /// The returned token must remain usable from other threads while calls
+    /// are in flight on this connection. This is the only cancellation path
+    /// the FFI exporter uses — [Connection::cancel] cannot be soundly called
+    /// while another call is in progress, so the exporter never calls it.
+    /// Return `None` if the driver does not support concurrent cancellation;
+    /// the exporter then reports `AdbcConnectionCancel` as not implemented.
+    fn cancel_token(&mut self) -> Option<Arc<dyn CancelToken>>;
 
     /// Get metadata about the database/driver.
     ///
@@ -464,4 +489,15 @@ pub trait Statement: Optionable<Option = OptionStatement> {
     ///
     /// ADBC API revision 1.1.0
     fn cancel(&mut self) -> Result<()>;
+
+    /// Get a shareable handle that cancels execution of an in-progress query
+    /// on this statement.
+    ///
+    /// The returned token must remain usable from other threads while calls
+    /// are in flight on this statement. This is the only cancellation path
+    /// the FFI exporter uses — [Statement::cancel] cannot be soundly called
+    /// while another call is in progress, so the exporter never calls it.
+    /// Return `None` if the driver does not support concurrent cancellation;
+    /// the exporter then reports `AdbcStatementCancel` as not implemented.
+    fn cancel_token(&mut self) -> Option<Arc<dyn CancelToken>>;
 }

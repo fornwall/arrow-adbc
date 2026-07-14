@@ -29,7 +29,7 @@ use arrow_buffer::{OffsetBuffer, ScalarBuffer};
 use arrow_schema::{ArrowError, DataType, Field, Schema, SchemaRef, UnionFields};
 
 use adbc_core::{
-    Connection, Database, Driver, Optionable, PartitionedResult, Statement, constants,
+    CancelToken, Connection, Database, Driver, Optionable, PartitionedResult, Statement, constants,
     error::{Error, Result, Status},
     options::{
         InfoCode, ObjectDepth, OptionConnection, OptionDatabase, OptionStatement, OptionValue,
@@ -287,6 +287,26 @@ impl Optionable for DummyConnection {
     }
 }
 
+// This error is used to test that errors round-trip correctly.
+fn connection_cancel_error() -> Error {
+    let mut error = Error::with_message_and_status("message", Status::Cancelled);
+    error.vendor_code = constants::ADBC_ERROR_VENDOR_CODE_PRIVATE_DATA;
+    error.sqlstate = [1, 2, 3, 4, 5];
+    error.details = Some(vec![
+        ("key1".into(), b"AAA".into()),
+        ("key2".into(), b"ZZZZZ".into()),
+    ]);
+    error
+}
+
+struct DummyConnectionCancelToken {}
+
+impl CancelToken for DummyConnectionCancelToken {
+    fn cancel(&self) -> Result<()> {
+        Err(connection_cancel_error())
+    }
+}
+
 impl Connection for DummyConnection {
     type StatementType = DummyStatement;
 
@@ -294,16 +314,12 @@ impl Connection for DummyConnection {
         Ok(Self::StatementType::default())
     }
 
-    // This method is used to test that errors round-trip correctly.
     fn cancel(&mut self) -> Result<()> {
-        let mut error = Error::with_message_and_status("message", Status::Cancelled);
-        error.vendor_code = constants::ADBC_ERROR_VENDOR_CODE_PRIVATE_DATA;
-        error.sqlstate = [1, 2, 3, 4, 5];
-        error.details = Some(vec![
-            ("key1".into(), b"AAA".into()),
-            ("key2".into(), b"ZZZZZ".into()),
-        ]);
-        Err(error)
+        Err(connection_cancel_error())
+    }
+
+    fn cancel_token(&mut self) -> Option<Arc<dyn CancelToken>> {
+        Some(Arc::new(DummyConnectionCancelToken {}))
     }
 
     fn commit(&mut self) -> Result<()> {
@@ -843,6 +859,14 @@ impl Optionable for DummyStatement {
     }
 }
 
+struct DummyStatementCancelToken {}
+
+impl CancelToken for DummyStatementCancelToken {
+    fn cancel(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
 impl Statement for DummyStatement {
     fn bind(&mut self, _batch: RecordBatch) -> Result<()> {
         Ok(())
@@ -854,6 +878,10 @@ impl Statement for DummyStatement {
 
     fn cancel(&mut self) -> Result<()> {
         Ok(())
+    }
+
+    fn cancel_token(&mut self) -> Option<Arc<dyn CancelToken>> {
+        Some(Arc::new(DummyStatementCancelToken {}))
     }
 
     fn execute(&mut self) -> Result<Box<dyn RecordBatchReader + Send + 'static>> {

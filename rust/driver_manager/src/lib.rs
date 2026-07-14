@@ -122,7 +122,7 @@ use arrow_array::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
 use arrow_array::{Array, RecordBatch, RecordBatchReader, StructArray};
 
 use adbc_core::{
-    Connection, Database, Driver, LoadFlags, Optionable, PartitionedResult, Statement,
+    CancelToken, Connection, Database, Driver, LoadFlags, Optionable, PartitionedResult, Statement,
     error::{Error, Result, Status},
     options::{self, AdbcVersion, InfoCode, OptionDatabase, OptionValue},
 };
@@ -892,6 +892,14 @@ impl Connection for ManagedConnection {
         check_status(status, error)
     }
 
+    fn cancel_token(&mut self) -> Option<Arc<dyn CancelToken>> {
+        // Every C driver call — including ConnectionCancel — is serialized
+        // behind this connection's mutex, so a token could never invoke the
+        // driver's cancel while another call holds the lock. Offering a
+        // genuinely concurrent token needs a locking redesign.
+        None
+    }
+
     fn commit(&mut self) -> Result<()> {
         let driver = self.ffi_driver();
         let mut connection = self.inner.connection.lock().unwrap();
@@ -1190,6 +1198,14 @@ impl Statement for ManagedStatement {
         let method = driver_method!(driver, StatementCancel);
         let status = unsafe { method(statement.deref_mut(), &mut error) };
         check_status(status, error)
+    }
+
+    fn cancel_token(&mut self) -> Option<Arc<dyn CancelToken>> {
+        // Every C driver call — including StatementCancel — is serialized
+        // behind this statement's mutex, so a token could never invoke the
+        // driver's cancel while another call holds the lock. Offering a
+        // genuinely concurrent token needs a locking redesign.
+        None
     }
 
     fn execute(&mut self) -> Result<Box<dyn RecordBatchReader + Send + 'static>> {
