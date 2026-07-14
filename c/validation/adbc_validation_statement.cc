@@ -2034,7 +2034,8 @@ void StatementTest::TestSqlPrepareUpdate() {
   std::string query =
       quirks()->RewriteSql("StatementTest::TestSqlPrepareUpdate::insert-bulk-ingest",
                            "INSERT INTO " + quirks()->QuoteIdentifier("bulk_ingest") +
-                               " VALUES (" + quirks()->BindParameter(0) + ")");
+                               " (" + quirks()->QuoteIdentifier("int64s") + ") VALUES (" +
+                               quirks()->BindParameter(0) + ")");
   ASSERT_THAT(AdbcStatementSetSqlQuery(&statement, query.c_str(), &error),
               IsOkStatus(&error));
   ASSERT_THAT(AdbcStatementPrepare(&statement, &error), IsOkStatus(&error));
@@ -2135,8 +2136,9 @@ void StatementTest::TestSqlPrepareUpdateStream() {
   // Prepare
   std::string query = quirks()->RewriteSql(
       "StatementTest::TestSqlPrepareUpdateStream::insert-bulk-ingest",
-      "INSERT INTO " + quirks()->QuoteIdentifier("bulk_ingest") + " VALUES (" +
-          quirks()->BindParameter(0) + ")");
+      "INSERT INTO " + quirks()->QuoteIdentifier("bulk_ingest") + " (" +
+          quirks()->QuoteIdentifier("ints") + ") VALUES (" + quirks()->BindParameter(0) +
+          ")");
   ASSERT_THAT(AdbcStatementSetSqlQuery(&statement, query.c_str(), &error),
               IsOkStatus(&error));
   ASSERT_THAT(AdbcStatementPrepare(&statement, &error), IsOkStatus(&error));
@@ -2264,10 +2266,10 @@ void StatementTest::TestSqlBind() {
       &schema.value, &array.value, &na_error, int_values, string_values);
   ASSERT_THAT(batch_result, IsOkErrno());
 
-  auto insert_query = quirks()->RewriteSql("StatementTest::TestSqlBind::insert-bindtest",
-                                           std::string("INSERT INTO bindtest VALUES (") +
-                                               quirks()->BindParameter(0) + ", " +
-                                               quirks()->BindParameter(1) + ")");
+  auto insert_query = quirks()->RewriteSql(
+      "StatementTest::TestSqlBind::insert-bindtest",
+      std::string("INSERT INTO bindtest (col1, col2) VALUES (") +
+          quirks()->BindParameter(0) + ", " + quirks()->BindParameter(1) + ")");
   ASSERT_THAT(AdbcStatementSetSqlQuery(&statement, insert_query.c_str(), &error),
               IsOkStatus(&error));
   ASSERT_THAT(AdbcStatementPrepare(&statement, &error), IsOkStatus(&error));
