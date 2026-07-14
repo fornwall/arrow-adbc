@@ -947,6 +947,19 @@ AdbcStatusCode PostgresStatement::SetOption(const char* key, const char* value,
                            key);
       return ADBC_STATUS_INVALID_ARGUMENT;
     }
+  } else if (std::strcmp(key, ADBC_STATEMENT_OPTION_INCREMENTAL) == 0) {
+    // Incremental execution is not supported, but the option defaults to
+    // disabled, so accept an explicit "disabled" as a no-op.
+    if (std::strcmp(value, ADBC_OPTION_VALUE_DISABLED) == 0) {
+      // No-op: incremental execution is already disabled.
+    } else if (std::strcmp(value, ADBC_OPTION_VALUE_ENABLED) == 0) {
+      InternalAdbcSetError(error, "[libpq] Incremental execution is not supported");
+      return ADBC_STATUS_NOT_IMPLEMENTED;
+    } else {
+      InternalAdbcSetError(error, "[libpq] Invalid value '%s' for option '%s'", value,
+                           key);
+      return ADBC_STATUS_INVALID_ARGUMENT;
+    }
   } else {
     InternalAdbcSetError(error, "[libpq] Unknown statement option '%s'", key);
     return ADBC_STATUS_NOT_IMPLEMENTED;

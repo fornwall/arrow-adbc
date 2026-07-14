@@ -2566,6 +2566,52 @@ void StatementTest::TestSqlQueryTrailingSemicolons() {
   ASSERT_THAT(AdbcStatementRelease(&statement, &error), IsOkStatus(&error));
 }
 
+void StatementTest::TestSqlQueryIncrementalDefault() {
+  if (!quirks()->supports_incremental_option_default()) {
+    GTEST_SKIP() << "Driver does not accept " << ADBC_STATEMENT_OPTION_INCREMENTAL
+                 << " at its default value";
+  }
+
+  ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
+
+  // Incremental execution defaults to disabled, so explicitly setting the
+  // option to its default value must succeed as a no-op even in drivers
+  // that do not implement incremental execution (a generic client may
+  // write back the default unconditionally).
+  ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_STATEMENT_OPTION_INCREMENTAL,
+                                     ADBC_OPTION_VALUE_DISABLED, &error),
+              IsOkStatus(&error));
+
+  // Actually enabling incremental execution may legitimately be unsupported.
+  AdbcStatusCode enable_status = AdbcStatementSetOption(
+      &statement, ADBC_STATEMENT_OPTION_INCREMENTAL, ADBC_OPTION_VALUE_ENABLED, &error);
+  if (enable_status == ADBC_STATUS_OK) {
+    ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_STATEMENT_OPTION_INCREMENTAL,
+                                       ADBC_OPTION_VALUE_DISABLED, &error),
+                IsOkStatus(&error));
+  } else {
+    ASSERT_THAT(enable_status, IsStatus(ADBC_STATUS_NOT_IMPLEMENTED, &error));
+    if (error.release) error.release(&error);
+  }
+
+  // The statement must still execute a plain query normally.
+  ASSERT_THAT(AdbcStatementSetSqlQuery(&statement, "SELECT 1", &error),
+              IsOkStatus(&error));
+  StreamReader reader;
+  ASSERT_THAT(AdbcStatementExecuteQuery(&statement, &reader.stream.value,
+                                        &reader.rows_affected, &error),
+              IsOkStatus(&error));
+  ASSERT_NO_FATAL_FAILURE(reader.GetSchema());
+  ASSERT_EQ(1, reader.schema->n_children);
+  int64_t nrows = 0;
+  while (true) {
+    ASSERT_NO_FATAL_FAILURE(reader.Next());
+    if (!reader.array->release) break;
+    nrows += reader.array->length;
+  }
+  ASSERT_EQ(1, nrows);
+}
+
 void StatementTest::TestSqlQueryRowsAffectedDelete() {
   ASSERT_THAT(quirks()->DropTable(&connection, "delete_test", &error),
               IsOkStatus(&error));
