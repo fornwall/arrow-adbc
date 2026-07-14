@@ -2199,8 +2199,9 @@ void StatementTest::TestSqlBind() {
 
   ASSERT_THAT(quirks()->DropTable(&connection, "bindtest", &error), IsOkStatus(&error));
 
-  ASSERT_THAT(AdbcStatementSetSqlQuery(
-                  &statement, "CREATE TABLE bindtest (col1 INTEGER, col2 TEXT)", &error),
+  std::string ddl = quirks()->BindTestTableDdl("bindtest").value_or(
+      "CREATE TABLE bindtest (col1 INTEGER, col2 TEXT)");
+  ASSERT_THAT(AdbcStatementSetSqlQuery(&statement, ddl.c_str(), &error),
               IsOkStatus(&error));
   ASSERT_THAT(AdbcStatementExecuteQuery(&statement, nullptr, nullptr, &error),
               IsOkStatus(&error));
@@ -2259,9 +2260,10 @@ void StatementTest::TestSqlQueryEmpty() {
   ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
 
   ASSERT_THAT(quirks()->DropTable(&connection, "queryempty", &error), IsOkStatus(&error));
-  ASSERT_THAT(
-      AdbcStatementSetSqlQuery(&statement, "CREATE TABLE queryempty (FOO INT)", &error),
-      IsOkStatus(&error));
+  std::string ddl = quirks()->QueryEmptyTableDdl("queryempty").value_or(
+      "CREATE TABLE queryempty (FOO INT)");
+  ASSERT_THAT(AdbcStatementSetSqlQuery(&statement, ddl.c_str(), &error),
+              IsOkStatus(&error));
   ASSERT_THAT(AdbcStatementExecuteQuery(&statement, nullptr, nullptr, &error),
               IsOkStatus(&error));
 
@@ -2446,8 +2448,9 @@ void StatementTest::TestSqlQueryInsertRollback() {
               IsOkStatus(&error));
   ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
 
-  ASSERT_THAT(AdbcStatementSetSqlQuery(&statement,
-                                       "CREATE TABLE \"rollbacktest\" (a INT)", &error),
+  std::string ddl = quirks()->SingleIntColumnTableDdl("rollbacktest", "a").value_or(
+      "CREATE TABLE \"rollbacktest\" (a INT)");
+  ASSERT_THAT(AdbcStatementSetSqlQuery(&statement, ddl.c_str(), &error),
               IsOkStatus(&error));
   ASSERT_THAT(AdbcStatementExecuteQuery(&statement, nullptr, nullptr, &error),
               IsOkStatus(&error));
@@ -2544,8 +2547,9 @@ void StatementTest::TestSqlQueryRowsAffectedDelete() {
               IsOkStatus(&error));
   ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
 
-  ASSERT_THAT(AdbcStatementSetSqlQuery(&statement,
-                                       "CREATE TABLE \"delete_test\" (foo INT)", &error),
+  std::string ddl = quirks()->SingleIntColumnTableDdl("delete_test", "foo").value_or(
+      "CREATE TABLE \"delete_test\" (foo INT)");
+  ASSERT_THAT(AdbcStatementSetSqlQuery(&statement, ddl.c_str(), &error),
               IsOkStatus(&error));
   ASSERT_THAT(AdbcStatementExecuteQuery(&statement, nullptr, nullptr, &error),
               IsOkStatus(&error));
@@ -2573,8 +2577,9 @@ void StatementTest::TestSqlQueryRowsAffectedDeleteStream() {
               IsOkStatus(&error));
   ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
 
-  ASSERT_THAT(AdbcStatementSetSqlQuery(&statement,
-                                       "CREATE TABLE \"delete_test\" (foo INT)", &error),
+  std::string ddl = quirks()->SingleIntColumnTableDdl("delete_test", "foo").value_or(
+      "CREATE TABLE \"delete_test\" (foo INT)");
+  ASSERT_THAT(AdbcStatementSetSqlQuery(&statement, ddl.c_str(), &error),
               IsOkStatus(&error));
   ASSERT_THAT(AdbcStatementExecuteQuery(&statement, nullptr, nullptr, &error),
               IsOkStatus(&error));
