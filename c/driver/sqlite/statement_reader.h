@@ -35,6 +35,9 @@ struct ADBC_EXPORT AdbcSqliteBinder {
   struct ArrowSchema schema;
   struct ArrowArrayStream params;
   enum ArrowType* types;
+  // For columns whose type is NANOARROW_TYPE_DICTIONARY, the type of the
+  // dictionary values; NANOARROW_TYPE_UNINITIALIZED otherwise.
+  enum ArrowType* dictionary_types;
   int* param_indices;
 
   // Scratch space

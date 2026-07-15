@@ -277,6 +277,34 @@ class ConstantArrayStream {
   size_t next_index_;
 };
 
+void DictionaryEncodeColumn(struct ArrowSchema* schema, struct ArrowArray* array,
+                            int64_t column, const std::vector<int32_t>& indices) {
+  ASSERT_LT(column, schema->n_children);
+  ASSERT_EQ(static_cast<int64_t>(indices.size()), array->length);
+
+  // Wrap the value field in dictionary<indices=int32, values=<original>>. The
+  // dictionary field itself is unnamed; the name belongs to the column.
+  Handle<struct ArrowSchema> dict_schema;
+  ASSERT_EQ(ArrowSchemaInitFromType(&dict_schema.value, NANOARROW_TYPE_INT32), 0);
+  ASSERT_EQ(ArrowSchemaSetName(&dict_schema.value, schema->children[column]->name), 0);
+  ASSERT_EQ(ArrowSchemaSetName(schema->children[column], nullptr), 0);
+  ASSERT_EQ(ArrowSchemaAllocateDictionary(&dict_schema.value), 0);
+  ArrowSchemaMove(schema->children[column], dict_schema.value.dictionary);
+  ArrowSchemaMove(&dict_schema.value, schema->children[column]);
+
+  // Build the index array and attach the original values as its dictionary.
+  Handle<struct ArrowArray> dict_array;
+  ASSERT_EQ(ArrowArrayInitFromType(&dict_array.value, NANOARROW_TYPE_INT32), 0);
+  ASSERT_EQ(ArrowArrayStartAppending(&dict_array.value), 0);
+  for (int32_t index : indices) {
+    ASSERT_EQ(ArrowArrayAppendInt(&dict_array.value, index), 0);
+  }
+  ASSERT_EQ(ArrowArrayFinishBuildingDefault(&dict_array.value, nullptr), 0);
+  ASSERT_EQ(ArrowArrayAllocateDictionary(&dict_array.value), 0);
+  ArrowArrayMove(array->children[column], dict_array.value.dictionary);
+  ArrowArrayMove(&dict_array.value, array->children[column]);
+}
+
 void MakeStream(struct ArrowArrayStream* stream, struct ArrowSchema* schema,
                 std::vector<struct ArrowArray> batches) {
   stream->get_last_error = &ConstantArrayStream::GetLastError;

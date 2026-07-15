@@ -404,6 +404,21 @@ int MakeBatch(struct ArrowSchema* schema, struct ArrowArray* batch,
   return MakeBatch(batch, error, columns...);
 }
 
+/// \brief Rewrite one column of a struct schema/array into a dictionary-encoded
+///   column.
+///
+/// The column's existing values become the dictionary, and \p indices selects
+/// which of them each row refers to, so that the column's logical value at row i
+/// becomes values[indices[i]]. Because dictionary encoding is an encoding of the
+/// same logical values rather than a distinct logical type, the result must
+/// behave exactly like a plain column holding those same values.
+///
+/// \p indices must have the same length as the array, so that the enclosing
+/// struct stays consistent. Indices may repeat, may leave dictionary values
+/// unreferenced, and may point at nulls within the dictionary.
+void DictionaryEncodeColumn(struct ArrowSchema* schema, struct ArrowArray* array,
+                            int64_t column, const std::vector<int32_t>& indices);
+
 /// \brief Make a stream from a list of batches.
 void MakeStream(struct ArrowArrayStream* stream, struct ArrowSchema* schema,
                 std::vector<struct ArrowArray> batches);
