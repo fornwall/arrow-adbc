@@ -2294,15 +2294,13 @@ void CompareSchemasDeeply(const struct ArrowSchema* expected,
   ASSERT_EQ(expected->n_children, actual->n_children)
       << "n_children mismatch at " << path;
   for (int64_t i = 0; i < expected->n_children; i++) {
-    ASSERT_NO_FATAL_FAILURE(CompareSchemasDeeply(expected->children[i],
-                                                 actual->children[i],
-                                                 path + "." + std::to_string(i)));
+    ASSERT_NO_FATAL_FAILURE(CompareSchemasDeeply(
+        expected->children[i], actual->children[i], path + "." + std::to_string(i)));
   }
   ASSERT_EQ(expected->dictionary == nullptr, actual->dictionary == nullptr)
       << "dictionary mismatch at " << path;
   if (expected->dictionary) {
-    ASSERT_NO_FATAL_FAILURE(CompareSchemasDeeply(expected->dictionary,
-                                                 actual->dictionary,
+    ASSERT_NO_FATAL_FAILURE(CompareSchemasDeeply(expected->dictionary, actual->dictionary,
                                                  path + ".dictionary"));
   }
 }
