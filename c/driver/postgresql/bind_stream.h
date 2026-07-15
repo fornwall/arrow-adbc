@@ -243,6 +243,19 @@ struct BindStream {
     for (int64_t col = 0; col < array_view->n_children; col++) {
       is_null_param[col] = ArrowArrayViewIsNull(array_view->children[col], current_row);
 
+      // A dictionary index may be non-null while pointing at a null value in
+      // the dictionary itself. Unlike COPY, which encodes a null inline as a -1
+      // field length, the extended query protocol signals a null parameter with
+      // a null param_values entry, so the null has to be resolved here rather
+      // than left to the field writer.
+      if (!is_null_param[col] &&
+          bind_schema_fields[col].type == NANOARROW_TYPE_DICTIONARY) {
+        const int64_t dict_index =
+            ArrowArrayViewGetIntUnsafe(array_view->children[col], current_row);
+        is_null_param[col] =
+            ArrowArrayViewIsNull(array_view->children[col]->dictionary, dict_index);
+      }
+
       // Safety check: NA type arrays should only contain nulls
       if (bind_schema_fields[col].type == NANOARROW_TYPE_NA && !is_null_param[col]) {
         return Status::InvalidArgument(

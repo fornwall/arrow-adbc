@@ -835,24 +835,29 @@ class PostgresCopyJsonbFieldWriter : public PostgresCopyFieldWriter {
   }
 };
 
-class PostgresCopyBinaryDictFieldWriter : public PostgresCopyFieldWriter {
+// Writes a dictionary-encoded column by resolving the index and delegating to a
+// writer for the dictionary's value type. Dictionary encoding is an encoding of
+// the same logical values rather than a distinct logical type, so any value type
+// that can be written plainly can be written through a dictionary.
+class PostgresCopyDictionaryFieldWriter : public PostgresCopyFieldWriter {
  public:
+  explicit PostgresCopyDictionaryFieldWriter(
+      std::unique_ptr<PostgresCopyFieldWriter> value_writer)
+      : value_writer_(std::move(value_writer)) {}
+
   ArrowErrorCode Write(ArrowBuffer* buffer, int64_t index, ArrowError* error) override {
-    int64_t dict_index = ArrowArrayViewGetIntUnsafe(array_view_, index);
+    const int64_t dict_index = ArrowArrayViewGetIntUnsafe(array_view_, index);
+    // An index may point at a null value in the dictionary itself.
     if (ArrowArrayViewIsNull(array_view_->dictionary, dict_index)) {
       constexpr int32_t field_size_bytes = -1;
-      NANOARROW_RETURN_NOT_OK(WriteChecked<int32_t>(buffer, field_size_bytes, error));
-    } else {
-      struct ArrowBufferView buffer_view =
-          ArrowArrayViewGetBytesUnsafe(array_view_->dictionary, dict_index);
-      NANOARROW_RETURN_NOT_OK(
-          WriteChecked<int32_t>(buffer, buffer_view.size_bytes, error));
-      NANOARROW_RETURN_NOT_OK(
-          ArrowBufferAppend(buffer, buffer_view.data.as_uint8, buffer_view.size_bytes));
+      return WriteChecked<int32_t>(buffer, field_size_bytes, error);
     }
 
-    return ADBC_STATUS_OK;
+    return value_writer_->Write(buffer, dict_index, error);
   }
+
+ private:
+  std::unique_ptr<PostgresCopyFieldWriter> value_writer_;
 };
 
 template <bool IsFixedSize>
@@ -1171,22 +1176,19 @@ static inline ArrowErrorCode MakeCopyFieldWriter(
       return NANOARROW_OK;
     }
     case NANOARROW_TYPE_DICTIONARY: {
-      struct ArrowSchemaView value_view;
-      NANOARROW_RETURN_NOT_OK(
-          ArrowSchemaViewInit(&value_view, schema->dictionary, error));
-      switch (value_view.type) {
-        case NANOARROW_TYPE_BINARY:
-        case NANOARROW_TYPE_STRING:
-        case NANOARROW_TYPE_LARGE_BINARY:
-        case NANOARROW_TYPE_LARGE_STRING: {
-          using T = PostgresCopyBinaryDictFieldWriter;
-          *out = T::Create<T>(array_view);
-          return NANOARROW_OK;
-        }
-        default:
-          break;
-      }
-      break;
+      // Build a writer for the dictionary's value type and delegate to it, so
+      // that any value type supported for a plain column is also supported when
+      // dictionary-encoded. PostgresType::FromSchema likewise resolves a
+      // dictionary to its value type, so target_type already refers to the
+      // value type and is passed through unchanged.
+      std::unique_ptr<PostgresCopyFieldWriter> value_writer;
+      NANOARROW_RETURN_NOT_OK(MakeCopyFieldWriter(schema->dictionary,
+                                                  array_view->dictionary, type_resolver,
+                                                  target_type, &value_writer, error));
+
+      using T = PostgresCopyDictionaryFieldWriter;
+      *out = T::Create<T>(array_view, std::move(value_writer));
+      return NANOARROW_OK;
     }
     case NANOARROW_TYPE_LIST:
     case NANOARROW_TYPE_LARGE_LIST:
