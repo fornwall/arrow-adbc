@@ -34,6 +34,8 @@ struct ADBC_EXPORT AdbcSqliteBinder {
   // State
   struct ArrowSchema schema;
   struct ArrowArrayStream params;
+  // The type each column's values are bound as; for a dictionary-encoded
+  // column, the type of the dictionary values.
   enum ArrowType* types;
   int* param_indices;
 

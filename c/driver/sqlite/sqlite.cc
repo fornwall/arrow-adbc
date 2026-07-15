@@ -938,6 +938,18 @@ class SqliteStatement : public driver::Statement<SqliteStatement> {
                                      arrow_error.message);
       }
 
+      // A dictionary-encoded column holds the same logical values as a plain
+      // column of its value type, so it gets that type's affinity.
+      if (view.type == NANOARROW_TYPE_DICTIONARY) {
+        status = ArrowSchemaViewInit(&view, binder_.schema.children[i]->dictionary,
+                                     &arrow_error);
+        if (status != 0) {
+          return status::fmt::Internal(
+              "failed to parse schema for column {}->dictionary: {} ({}): {}", i,
+              std::strerror(status), status, arrow_error.message);
+        }
+      }
+
       switch (view.type) {
         case NANOARROW_TYPE_BOOL:
         case NANOARROW_TYPE_UINT8:

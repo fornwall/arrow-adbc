@@ -2276,6 +2276,91 @@ TEST_F(PostgresStatementTest, BindUpsertWithSlicedListParameter) {
   ASSERT_THAT(AdbcStatementRelease(&statement, &error), IsOkStatus(&error));
 }
 
+// Binding a dictionary-encoded parameter column must behave exactly like
+// binding a plain column of the dictionary's value type: dictionary encoding is
+// an encoding of the same logical values, not a distinct logical type. pandas
+// produces these routinely, e.g. pd.Series([1, 2, 1], dtype="category").
+// Non-string/binary value types used to be rejected by the COPY writer.
+TEST_F(PostgresStatementTest, BindDictionaryParameters) {
+  ASSERT_THAT(quirks()->DropTable(&connection, "adbc_test", &error), IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
+
+  ASSERT_THAT(
+      AdbcStatementSetSqlQuery(
+          &statement, "CREATE TABLE adbc_test (id INT, num BIGINT, buf BYTEA)", &error),
+      IsOkStatus(&error));
+  {
+    adbc_validation::StreamReader reader;
+    ASSERT_THAT(
+        AdbcStatementExecuteQuery(&statement, &reader.stream.value, nullptr, &error),
+        IsOkStatus(&error));
+  }
+
+  adbc_validation::Handle<struct ArrowSchema> bind_schema;
+  adbc_validation::Handle<struct ArrowArray> bind;
+  struct ArrowError na_error;
+  ASSERT_EQ(
+      adbc_validation::MakeSchema(&bind_schema.value, {{"id", NANOARROW_TYPE_INT32},
+                                                       {"num", NANOARROW_TYPE_INT64},
+                                                       {"buf", NANOARROW_TYPE_BINARY}}),
+      ADBC_STATUS_OK);
+  ASSERT_EQ((adbc_validation::MakeBatch<int32_t, int64_t, std::vector<std::byte>>(
+                &bind_schema.value, &bind.value, &na_error, {0, 1, 2, 3},
+                {10, 20, std::nullopt, 40},
+                {std::vector<std::byte>{std::byte{0x00}, std::byte{0x01}},
+                 std::vector<std::byte>{std::byte{0xfe}, std::byte{0xff}}, std::nullopt,
+                 std::vector<std::byte>{std::byte{0x7f}}})),
+            ADBC_STATUS_OK);
+
+  // Dictionary-encode num and buf, leaving id plain. The indices repeat values,
+  // leave entries unreferenced, and (at row 2) resolve to a null within the
+  // dictionary.
+  ASSERT_NO_FATAL_FAILURE(adbc_validation::DictionaryEncodeColumn(
+      &bind_schema.value, &bind.value, /*column=*/1, {1, 0, 2, 1}));
+  ASSERT_NO_FATAL_FAILURE(adbc_validation::DictionaryEncodeColumn(
+      &bind_schema.value, &bind.value, /*column=*/2, {3, 2, 0, 1}));
+
+  ASSERT_THAT(
+      AdbcStatementSetSqlQuery(
+          &statement, "INSERT INTO adbc_test (id, num, buf) VALUES ($1, $2, $3)", &error),
+      IsOkStatus(&error));
+  ASSERT_THAT(AdbcStatementBind(&statement, &bind.value, &bind_schema.value, &error),
+              IsOkStatus(&error));
+  {
+    adbc_validation::StreamReader reader;
+    ASSERT_THAT(
+        AdbcStatementExecuteQuery(&statement, &reader.stream.value, nullptr, &error),
+        IsOkStatus(&error));
+  }
+
+  ASSERT_THAT(AdbcStatementSetSqlQuery(
+                  &statement, "SELECT num, buf FROM adbc_test ORDER BY id", &error),
+              IsOkStatus(&error));
+  adbc_validation::StreamReader reader;
+  ASSERT_THAT(
+      AdbcStatementExecuteQuery(&statement, &reader.stream.value, nullptr, &error),
+      IsOkStatus(&error));
+  ASSERT_NO_FATAL_FAILURE(reader.GetSchema());
+  ASSERT_NO_FATAL_FAILURE(reader.Next());
+  ASSERT_NE(reader.array->release, nullptr);
+  ASSERT_EQ(reader.array->length, 4);
+
+  // num must come back as BIGINT holding values[indices[i]].
+  ASSERT_EQ(reader.fields[0].type, NANOARROW_TYPE_INT64);
+  ASSERT_NO_FATAL_FAILURE(adbc_validation::CompareArray<int64_t>(
+      reader.array_view->children[0], {20, 10, std::nullopt, 20}));
+
+  // buf must come back as BYTEA, not text.
+  ASSERT_EQ(reader.fields[1].type, NANOARROW_TYPE_BINARY);
+  ASSERT_NO_FATAL_FAILURE(adbc_validation::CompareArray<std::vector<std::byte>>(
+      reader.array_view->children[1],
+      {std::vector<std::byte>{std::byte{0x7f}}, std::nullopt,
+       std::vector<std::byte>{std::byte{0x00}, std::byte{0x01}},
+       std::vector<std::byte>{std::byte{0xfe}, std::byte{0xff}}}));
+
+  ASSERT_THAT(AdbcStatementRelease(&statement, &error), IsOkStatus(&error));
+}
+
 TEST_F(PostgresStatementTest, SqlExecuteCopyZeroRowOutputError) {
   ASSERT_THAT(quirks()->DropTable(&connection, "adbc_test", &error), IsOkStatus(&error));
   ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));

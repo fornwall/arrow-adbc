@@ -92,24 +92,22 @@ AdbcStatusCode InternalAdbcSqliteBinderSet(struct AdbcSqliteBinder* binder,
         return ADBC_STATUS_INVALID_ARGUMENT;
       }
 
-      // We only support string/binary dictionary-encoded values
-      switch (value_view.type) {
-        case NANOARROW_TYPE_STRING:
-        case NANOARROW_TYPE_LARGE_STRING:
-        case NANOARROW_TYPE_STRING_VIEW:
-        case NANOARROW_TYPE_BINARY:
-        case NANOARROW_TYPE_LARGE_BINARY:
-        case NANOARROW_TYPE_FIXED_SIZE_BINARY:
-        case NANOARROW_TYPE_BINARY_VIEW:
-          break;
-        default:
-          InternalAdbcSetError(error, "Column %d dictionary has unsupported type %s", i,
-                               ArrowTypeString(value_view.type));
-          return ADBC_STATUS_NOT_IMPLEMENTED;
+      // Dictionary encoding is an encoding, not a logical type: any value type
+      // that can be bound plainly can be bound through a dictionary, since
+      // binding resolves the index and then dispatches on the value type just
+      // like a plain column would. Nested dictionaries are not part of the Arrow
+      // format, so reject them rather than recursing.
+      if (value_view.type == NANOARROW_TYPE_DICTIONARY ||
+          value_view.type == NANOARROW_TYPE_UNINITIALIZED) {
+        InternalAdbcSetError(error, "Column %d dictionary has unsupported type %s", i,
+                             ArrowTypeString(value_view.type));
+        return ADBC_STATUS_NOT_IMPLEMENTED;
       }
-    }
 
-    binder->types[i] = view.type;
+      binder->types[i] = value_view.type;
+    } else {
+      binder->types[i] = view.type;
+    }
   }
 
   return ADBC_STATUS_OK;
@@ -356,16 +354,34 @@ AdbcStatusCode InternalAdbcSqliteBinderBindNext(struct AdbcSqliteBinder* binder,
       bind_index = binder->param_indices[col];
     }
 
-    if (ArrowArrayViewIsNull(binder->batch.children[col], binder->next_row)) {
+    // The array/schema/row that the value to bind actually lives in. For a
+    // dictionary-encoded column this is resolved below to the dictionary values
+    // array (binder->types[col] already holds the value type), so that binding
+    // dispatches on the *value* type and reuses exactly the same code as the
+    // equivalent plain column.
+    struct ArrowArrayView* view = binder->batch.children[col];
+    struct ArrowSchema* col_schema = binder->schema.children[col];
+    enum ArrowType type = binder->types[col];
+    int64_t row = binder->next_row;
+    char is_null = ArrowArrayViewIsNull(view, row) != 0;
+
+    if (!is_null && view->dictionary != NULL) {
+      row = ArrowArrayViewGetIntUnsafe(view, row);
+      view = view->dictionary;
+      col_schema = col_schema->dictionary;
+      // A dictionary index may point at a null value in the dictionary itself.
+      is_null = ArrowArrayViewIsNull(view, row) != 0;
+    }
+
+    if (is_null) {
       status = sqlite3_bind_null(stmt, bind_index);
     } else {
-      switch (binder->types[col]) {
+      switch (type) {
         case NANOARROW_TYPE_BINARY:
         case NANOARROW_TYPE_LARGE_BINARY:
         case NANOARROW_TYPE_FIXED_SIZE_BINARY:
         case NANOARROW_TYPE_BINARY_VIEW: {
-          struct ArrowBufferView value =
-              ArrowArrayViewGetBytesUnsafe(binder->batch.children[col], binder->next_row);
+          struct ArrowBufferView value = ArrowArrayViewGetBytesUnsafe(view, row);
           status = sqlite3_bind_blob(stmt, bind_index, value.data.as_char,
                                      (int)value.size_bytes, SQLITE_STATIC);
           break;
@@ -375,8 +391,7 @@ AdbcStatusCode InternalAdbcSqliteBinderBindNext(struct AdbcSqliteBinder* binder,
         case NANOARROW_TYPE_UINT16:
         case NANOARROW_TYPE_UINT32:
         case NANOARROW_TYPE_UINT64: {
-          uint64_t value =
-              ArrowArrayViewGetUIntUnsafe(binder->batch.children[col], binder->next_row);
+          uint64_t value = ArrowArrayViewGetUIntUnsafe(view, row);
           if (value > INT64_MAX) {
             InternalAdbcSetError(error,
                                  "Column %d has unsigned integer value %" PRIu64
@@ -391,45 +406,27 @@ AdbcStatusCode InternalAdbcSqliteBinderBindNext(struct AdbcSqliteBinder* binder,
         case NANOARROW_TYPE_INT16:
         case NANOARROW_TYPE_INT32:
         case NANOARROW_TYPE_INT64: {
-          int64_t value =
-              ArrowArrayViewGetIntUnsafe(binder->batch.children[col], binder->next_row);
+          int64_t value = ArrowArrayViewGetIntUnsafe(view, row);
           status = sqlite3_bind_int64(stmt, bind_index, value);
           break;
         }
         case NANOARROW_TYPE_HALF_FLOAT:
         case NANOARROW_TYPE_FLOAT:
         case NANOARROW_TYPE_DOUBLE: {
-          double value = ArrowArrayViewGetDoubleUnsafe(binder->batch.children[col],
-                                                       binder->next_row);
+          double value = ArrowArrayViewGetDoubleUnsafe(view, row);
           status = sqlite3_bind_double(stmt, bind_index, value);
           break;
         }
         case NANOARROW_TYPE_STRING:
         case NANOARROW_TYPE_LARGE_STRING:
         case NANOARROW_TYPE_STRING_VIEW: {
-          struct ArrowBufferView value =
-              ArrowArrayViewGetBytesUnsafe(binder->batch.children[col], binder->next_row);
+          struct ArrowBufferView value = ArrowArrayViewGetBytesUnsafe(view, row);
           status = sqlite3_bind_text(stmt, bind_index, value.data.as_char,
                                      (int)value.size_bytes, SQLITE_STATIC);
           break;
         }
-        case NANOARROW_TYPE_DICTIONARY: {
-          int64_t value_index =
-              ArrowArrayViewGetIntUnsafe(binder->batch.children[col], binder->next_row);
-          if (ArrowArrayViewIsNull(binder->batch.children[col]->dictionary,
-                                   value_index)) {
-            status = sqlite3_bind_null(stmt, bind_index);
-          } else {
-            struct ArrowBufferView value = ArrowArrayViewGetBytesUnsafe(
-                binder->batch.children[col]->dictionary, value_index);
-            status = sqlite3_bind_text(stmt, bind_index, value.data.as_char,
-                                       (int)value.size_bytes, SQLITE_STATIC);
-          }
-          break;
-        }
         case NANOARROW_TYPE_DATE32: {
-          int64_t value =
-              ArrowArrayViewGetIntUnsafe(binder->batch.children[col], binder->next_row);
+          int64_t value = ArrowArrayViewGetIntUnsafe(view, row);
           char* tsstr;
 
           if ((value > INT32_MAX) || (value < INT32_MIN)) {
@@ -457,14 +454,12 @@ AdbcStatusCode InternalAdbcSqliteBinderBindNext(struct AdbcSqliteBinder* binder,
 #pragma warning(disable : 4244)  // RAISE_NA returns ArrowErrorCode, but this function
                                  // returns AdbcStatusCode
 #endif
-          RAISE_NA(ArrowSchemaViewInit(&bind_schema_view, binder->schema.children[col],
-                                       &arrow_error));
+          RAISE_NA(ArrowSchemaViewInit(&bind_schema_view, col_schema, &arrow_error));
 #ifdef _MSC_VER
 #pragma warning(pop)
 #endif
           enum ArrowTimeUnit unit = bind_schema_view.time_unit;
-          int64_t value =
-              ArrowArrayViewGetIntUnsafe(binder->batch.children[col], binder->next_row);
+          int64_t value = ArrowArrayViewGetIntUnsafe(view, row);
 
           char* tsstr;
           RAISE_ADBC(ArrowTimestampToIsoString(value, unit, &tsstr, error));
@@ -476,8 +471,13 @@ AdbcStatusCode InternalAdbcSqliteBinderBindNext(struct AdbcSqliteBinder* binder,
           break;
         }
         default:
-          InternalAdbcSetError(error, "Column %d has unsupported type %s", col,
-                               ArrowTypeString(binder->types[col]));
+          if (binder->schema.children[col]->dictionary != NULL) {
+            InternalAdbcSetError(error, "Column %d dictionary has unsupported type %s",
+                                 col, ArrowTypeString(type));
+          } else {
+            InternalAdbcSetError(error, "Column %d has unsupported type %s", col,
+                                 ArrowTypeString(type));
+          }
           return ADBC_STATUS_NOT_IMPLEMENTED;
       }
     }

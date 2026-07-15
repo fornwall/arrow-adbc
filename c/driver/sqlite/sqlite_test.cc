@@ -1090,3 +1090,119 @@ INSTANTIATE_TEST_SUITE_P(FloatTypes, SqliteFloatParamTest,
 
                              // NANOARROW_TYPE_FLOAT,
                              NANOARROW_TYPE_DOUBLE));
+
+/// Dictionary-encoded parameters. Dictionary encoding is an encoding of the
+/// same logical values, so binding a dictionary<values=T> column must behave
+/// exactly like binding a plain column of type T.
+class SqliteDictionaryParamTest : public SqliteReaderTest {
+ public:
+  /// Bind a single dictionary-encoded parameter column. The dictionary holds
+  /// `values`; `indices` selects which of them each row refers to (and must be
+  /// the same length as `values`, so that the enclosing struct array stays
+  /// consistent). Indices may repeat, and may leave dictionary values unused.
+  template <typename CType>
+  void BindDictionary(adbc_validation::SchemaField field,
+                      const std::vector<std::optional<CType>>& values,
+                      const std::vector<int32_t>& indices) {
+    ASSERT_EQ(values.size(), indices.size());
+
+    field.name = "";
+    Handle<struct ArrowSchema> schema;
+    Handle<struct ArrowArray> batch;
+    struct ArrowError na_error;
+    ASSERT_THAT(adbc_validation::MakeSchema(&schema.value, {field}), IsOkErrno());
+    ASSERT_THAT(
+        adbc_validation::MakeBatch<CType>(&schema.value, &batch.value, &na_error, values),
+        IsOkErrno());
+
+    ASSERT_NO_FATAL_FAILURE(adbc_validation::DictionaryEncodeColumn(
+        &schema.value, &batch.value, /*column=*/0, indices));
+
+    ASSERT_NO_FATAL_FAILURE(Bind(&batch.value, &schema.value));
+  }
+};
+
+/// Regression test: a dictionary with binary values used to be bound with
+/// sqlite3_bind_text regardless of the value type, so it came back as a string
+/// instead of a blob. Covers every binary layout the binder supports plainly;
+/// all of them are fixed-width 2 here so that FIXED_SIZE_BINARY can share the
+/// same values.
+class SqliteDictionaryBinaryParamTest : public SqliteDictionaryParamTest,
+                                        public ::testing::WithParamInterface<ArrowType> {
+};
+
+TEST_P(SqliteDictionaryBinaryParamTest, BindBinary) {
+  const std::vector<std::optional<std::vector<std::byte>>> values = {
+      std::vector<std::byte>{std::byte{0x00}, std::byte{0x01}},
+      std::vector<std::byte>{std::byte{0xfe}, std::byte{0xff}},
+      std::nullopt,
+      std::vector<std::byte>{std::byte{0x7f}, std::byte{0x80}},
+  };
+  adbc_validation::SchemaField field =
+      GetParam() == NANOARROW_TYPE_FIXED_SIZE_BINARY
+          ? adbc_validation::SchemaField::FixedSize("", GetParam(), /*fixed_size=*/2)
+          : adbc_validation::SchemaField("", GetParam());
+  ASSERT_NO_FATAL_FAILURE(
+      BindDictionary<std::vector<std::byte>>(field, values, {1, 0, 2, 1}));
+
+  adbc_validation::StreamReader reader;
+  ASSERT_NO_FATAL_FAILURE(Exec("SELECT ?", kInferRows, &reader));
+  ASSERT_EQ(1, reader.schema->n_children);
+  ASSERT_EQ(NANOARROW_TYPE_BINARY, reader.fields[0].type);
+
+  ASSERT_NO_FATAL_FAILURE(reader.Next());
+  ASSERT_NO_FATAL_FAILURE(CompareArray<std::vector<std::byte>>(
+      reader.array_view->children[0], {values[1], values[0], std::nullopt, values[1]}));
+}
+
+INSTANTIATE_TEST_SUITE_P(BinaryTypes, SqliteDictionaryBinaryParamTest,
+                         ::testing::Values(NANOARROW_TYPE_BINARY,
+                                           NANOARROW_TYPE_LARGE_BINARY,
+                                           NANOARROW_TYPE_BINARY_VIEW,
+                                           NANOARROW_TYPE_FIXED_SIZE_BINARY));
+
+TEST_F(SqliteDictionaryParamTest, BindInt64) {
+  const std::vector<std::optional<int64_t>> values = {42, -1, std::nullopt, 8};
+  ASSERT_NO_FATAL_FAILURE(
+      BindDictionary<int64_t>({"", NANOARROW_TYPE_INT64}, values, {0, 3, 0, 2}));
+
+  adbc_validation::StreamReader reader;
+  ASSERT_NO_FATAL_FAILURE(Exec("SELECT ?", kInferRows, &reader));
+  ASSERT_EQ(1, reader.schema->n_children);
+  ASSERT_EQ(NANOARROW_TYPE_INT64, reader.fields[0].type);
+
+  ASSERT_NO_FATAL_FAILURE(reader.Next());
+  ASSERT_NO_FATAL_FAILURE(
+      CompareArray<int64_t>(reader.array_view->children[0], {42, 8, 42, std::nullopt}));
+}
+
+TEST_F(SqliteDictionaryParamTest, BindDouble) {
+  const std::vector<std::optional<double>> values = {1.5, -2.25, std::nullopt, 0.0};
+  ASSERT_NO_FATAL_FAILURE(
+      BindDictionary<double>({"", NANOARROW_TYPE_DOUBLE}, values, {3, 1, 0, 2}));
+
+  adbc_validation::StreamReader reader;
+  ASSERT_NO_FATAL_FAILURE(Exec("SELECT ?", kInferRows, &reader));
+  ASSERT_EQ(1, reader.schema->n_children);
+  ASSERT_EQ(NANOARROW_TYPE_DOUBLE, reader.fields[0].type);
+
+  ASSERT_NO_FATAL_FAILURE(reader.Next());
+  ASSERT_NO_FATAL_FAILURE(CompareArray<double>(reader.array_view->children[0],
+                                               {0.0, -2.25, 1.5, std::nullopt}));
+}
+
+TEST_F(SqliteDictionaryParamTest, BindString) {
+  const std::vector<std::optional<std::string>> values = {"foo", "bar", std::nullopt,
+                                                          "baz"};
+  ASSERT_NO_FATAL_FAILURE(
+      BindDictionary<std::string>({"", NANOARROW_TYPE_STRING}, values, {1, 1, 3, 2}));
+
+  adbc_validation::StreamReader reader;
+  ASSERT_NO_FATAL_FAILURE(Exec("SELECT ?", kInferRows, &reader));
+  ASSERT_EQ(1, reader.schema->n_children);
+  ASSERT_EQ(NANOARROW_TYPE_STRING, reader.fields[0].type);
+
+  ASSERT_NO_FATAL_FAILURE(reader.Next());
+  ASSERT_NO_FATAL_FAILURE(CompareArray<std::string>(reader.array_view->children[0],
+                                                    {"bar", "bar", "baz", std::nullopt}));
+}

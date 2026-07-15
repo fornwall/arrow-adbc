@@ -1813,4 +1813,91 @@ TEST_F(PostgresCopyTest, PostgresCopyWriteMultiBatch) {
   }
 }
 
+// Dictionary-encoded binary values must be written as bytea, exactly as the
+// equivalent plain binary column is.
+TEST_F(PostgresCopyTest, PostgresCopyWriteDictionaryBinary) {
+  adbc_validation::Handle<struct ArrowSchema> schema;
+  adbc_validation::Handle<struct ArrowArray> array;
+  struct ArrowError na_error;
+  ASSERT_EQ(adbc_validation::MakeSchema(&schema.value, {{"col", NANOARROW_TYPE_BINARY}}),
+            ADBC_STATUS_OK);
+  // The dictionary deliberately holds the values in a different order than they
+  // appear, so that the indices below exercise real index resolution. Index 4
+  // resolves to a null *within the dictionary*.
+  ASSERT_EQ(adbc_validation::MakeBatch<std::vector<std::byte>>(
+                &schema.value, &array.value, &na_error,
+                {std::vector<std::byte>{std::byte{0xfe}, std::byte{0xff}},
+                 std::vector<std::byte>{},
+                 std::vector<std::byte>{std::byte{0x01}, std::byte{0x02}, std::byte{0x03},
+                                        std::byte{0x04}},
+                 std::vector<std::byte>{std::byte{0x00}, std::byte{0x01}}, std::nullopt}),
+            ADBC_STATUS_OK);
+  ASSERT_NO_FATAL_FAILURE(adbc_validation::DictionaryEncodeColumn(
+      &schema.value, &array.value, /*column=*/0, {1, 3, 2, 0, 4}));
+
+  PostgresCopyStreamWriteTester tester;
+  ASSERT_EQ(tester.Init(&schema.value, &array.value, *type_resolver_), NANOARROW_OK);
+  ASSERT_EQ(tester.WriteAll(nullptr), ENODATA);
+
+  // Must be byte-for-byte identical to the equivalent plain binary column.
+  const struct ArrowBuffer buf = tester.WriteBuffer();
+  constexpr size_t buf_size = sizeof(kTestPgCopyBinary) - 2;
+  ASSERT_EQ(buf.size_bytes, buf_size);
+  for (size_t i = 0; i < buf_size; i++) {
+    ASSERT_EQ(buf.data[i], kTestPgCopyBinary[i]) << "failure at index " << i;
+  }
+}
+
+// Dictionary-encoded int64 values used to be rejected outright.
+TEST_F(PostgresCopyTest, PostgresCopyWriteDictionaryInt64) {
+  adbc_validation::Handle<struct ArrowSchema> schema;
+  adbc_validation::Handle<struct ArrowArray> array;
+  struct ArrowError na_error;
+  ASSERT_EQ(adbc_validation::MakeSchema(&schema.value, {{"col", NANOARROW_TYPE_INT64}}),
+            ADBC_STATUS_OK);
+  ASSERT_EQ(adbc_validation::MakeBatch<int64_t>(&schema.value, &array.value, &na_error,
+                                                {1, -1, 123, -123, std::nullopt}),
+            ADBC_STATUS_OK);
+  ASSERT_NO_FATAL_FAILURE(adbc_validation::DictionaryEncodeColumn(
+      &schema.value, &array.value, /*column=*/0, {3, 1, 0, 2, 4}));
+
+  PostgresCopyStreamWriteTester tester;
+  ASSERT_EQ(tester.Init(&schema.value, &array.value, *type_resolver_), NANOARROW_OK);
+  ASSERT_EQ(tester.WriteAll(nullptr), ENODATA);
+
+  // Must be byte-for-byte identical to the equivalent plain int64 column.
+  const struct ArrowBuffer buf = tester.WriteBuffer();
+  constexpr size_t buf_size = sizeof(kTestPgCopyBigInt) - 2;
+  ASSERT_EQ(buf.size_bytes, buf_size);
+  for (size_t i = 0; i < buf_size; i++) {
+    ASSERT_EQ(buf.data[i], kTestPgCopyBigInt[i]) << "failure at index " << i;
+  }
+}
+
+// Dictionary-encoded double values used to be rejected outright.
+TEST_F(PostgresCopyTest, PostgresCopyWriteDictionaryDouble) {
+  adbc_validation::Handle<struct ArrowSchema> schema;
+  adbc_validation::Handle<struct ArrowArray> array;
+  struct ArrowError na_error;
+  ASSERT_EQ(adbc_validation::MakeSchema(&schema.value, {{"col", NANOARROW_TYPE_DOUBLE}}),
+            ADBC_STATUS_OK);
+  ASSERT_EQ(adbc_validation::MakeBatch<double>(&schema.value, &array.value, &na_error,
+                                               {1, -1, 123.456, -123.456, std::nullopt}),
+            ADBC_STATUS_OK);
+  ASSERT_NO_FATAL_FAILURE(adbc_validation::DictionaryEncodeColumn(
+      &schema.value, &array.value, /*column=*/0, {3, 1, 0, 2, 4}));
+
+  PostgresCopyStreamWriteTester tester;
+  ASSERT_EQ(tester.Init(&schema.value, &array.value, *type_resolver_), NANOARROW_OK);
+  ASSERT_EQ(tester.WriteAll(nullptr), ENODATA);
+
+  // Must be byte-for-byte identical to the equivalent plain double column.
+  const struct ArrowBuffer buf = tester.WriteBuffer();
+  constexpr size_t buf_size = sizeof(kTestPgCopyDoublePrecision) - 2;
+  ASSERT_EQ(buf.size_bytes, buf_size);
+  for (size_t i = 0; i < buf_size; i++) {
+    ASSERT_EQ(buf.data[i], kTestPgCopyDoublePrecision[i]) << "failure at index " << i;
+  }
+}
+
 }  // namespace adbcpq
