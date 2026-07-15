@@ -1213,9 +1213,12 @@ AdbcStatusCode InternalAdbcSqliteExportReader(sqlite3* db, sqlite3_stmt* stmt,
     }
   }
 
-  if (status == ADBC_STATUS_OK && !reader->done) {
+  if (status == ADBC_STATUS_OK) {
+    // Even if the bound parameter stream had zero rows (reader->done was set
+    // above without executing the query), still run InferFinalize below so
+    // that the reported schema has the correct number of columns.
     int64_t num_rows = 0;
-    while (((size_t)num_rows) < batch_size) {
+    while (!reader->done && ((size_t)num_rows) < batch_size) {
       int rc = sqlite3_step(stmt);
       if (rc == SQLITE_DONE) {
         if (!binder) {
