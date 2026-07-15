@@ -18,6 +18,7 @@
 #include "adbc_validation.h"
 
 #include <cstring>
+#include <numeric>
 #include <string>
 #include <utility>
 #include <vector>
@@ -107,35 +108,12 @@ void StatementTest::TestSqlIngestType(SchemaField field,
               IsOkErrno());
 
   if (dictionary_encode) {
-    // Create a dictionary-encoded version of the target schema
-    Handle<struct ArrowSchema> dict_schema;
-    ASSERT_THAT(ArrowSchemaInitFromType(&dict_schema.value, NANOARROW_TYPE_INT32),
-                IsOkErrno());
-    ASSERT_THAT(ArrowSchemaSetName(&dict_schema.value, schema.value.children[0]->name),
-                IsOkErrno());
-    ASSERT_THAT(ArrowSchemaSetName(schema.value.children[0], nullptr), IsOkErrno());
-
-    // Swap it into the target schema
-    ASSERT_THAT(ArrowSchemaAllocateDictionary(&dict_schema.value), IsOkErrno());
-    ArrowSchemaMove(schema.value.children[0], dict_schema.value.dictionary);
-    ArrowSchemaMove(&dict_schema.value, schema.value.children[0]);
-
-    // Create a dictionary-encoded array with easy 0...n indices so that the
-    // matched values will be the same.
-    Handle<struct ArrowArray> dict_array;
-    ASSERT_THAT(ArrowArrayInitFromType(&dict_array.value, NANOARROW_TYPE_INT32),
-                IsOkErrno());
-    ASSERT_THAT(ArrowArrayStartAppending(&dict_array.value), IsOkErrno());
-    for (size_t i = 0; i < values.size(); i++) {
-      ASSERT_THAT(ArrowArrayAppendInt(&dict_array.value, static_cast<int64_t>(i)),
-                  IsOkErrno());
-    }
-    ASSERT_THAT(ArrowArrayFinishBuildingDefault(&dict_array.value, nullptr), IsOkErrno());
-
-    // Swap it into the target batch
-    ASSERT_THAT(ArrowArrayAllocateDictionary(&dict_array.value), IsOkErrno());
-    ArrowArrayMove(array.value.children[0], dict_array.value.dictionary);
-    ArrowArrayMove(&dict_array.value, array.value.children[0]);
+    // Dictionary-encode the column with easy 0...n indices so that the matched
+    // values will be the same.
+    std::vector<int32_t> indices(values.size());
+    std::iota(indices.begin(), indices.end(), 0);
+    ASSERT_NO_FATAL_FAILURE(
+        DictionaryEncodeColumn(&schema.value, &array.value, /*column=*/0, indices));
   }
 
   ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));

@@ -60,11 +60,6 @@ AdbcStatusCode InternalAdbcSqliteBinderSet(struct AdbcSqliteBinder* binder,
 
   binder->types =
       (enum ArrowType*)malloc(binder->schema.n_children * sizeof(enum ArrowType));
-  binder->dictionary_types =
-      (enum ArrowType*)malloc(binder->schema.n_children * sizeof(enum ArrowType));
-  // NANOARROW_TYPE_UNINITIALIZED is 0, so this marks every column as "not a
-  // dictionary" until proven otherwise below.
-  memset(binder->dictionary_types, 0, binder->schema.n_children * sizeof(enum ArrowType));
 
   if (bind_by_name) {
     binder->param_indices = (int*)malloc(binder->schema.n_children * sizeof(int));
@@ -109,10 +104,10 @@ AdbcStatusCode InternalAdbcSqliteBinderSet(struct AdbcSqliteBinder* binder,
         return ADBC_STATUS_NOT_IMPLEMENTED;
       }
 
-      binder->dictionary_types[i] = value_view.type;
+      binder->types[i] = value_view.type;
+    } else {
+      binder->types[i] = view.type;
     }
-
-    binder->types[i] = view.type;
   }
 
   return ADBC_STATUS_OK;
@@ -359,21 +354,21 @@ AdbcStatusCode InternalAdbcSqliteBinderBindNext(struct AdbcSqliteBinder* binder,
       bind_index = binder->param_indices[col];
     }
 
-    // The array/schema/type/row that the value to bind actually lives in. For a
+    // The array/schema/row that the value to bind actually lives in. For a
     // dictionary-encoded column this is resolved below to the dictionary values
-    // array, so that binding dispatches on the *value* type and reuses exactly
-    // the same code as the equivalent plain column.
+    // array (binder->types[col] already holds the value type), so that binding
+    // dispatches on the *value* type and reuses exactly the same code as the
+    // equivalent plain column.
     struct ArrowArrayView* view = binder->batch.children[col];
     struct ArrowSchema* col_schema = binder->schema.children[col];
     enum ArrowType type = binder->types[col];
     int64_t row = binder->next_row;
     char is_null = ArrowArrayViewIsNull(view, row) != 0;
 
-    if (!is_null && type == NANOARROW_TYPE_DICTIONARY) {
+    if (!is_null && view->dictionary != NULL) {
       row = ArrowArrayViewGetIntUnsafe(view, row);
       view = view->dictionary;
       col_schema = col_schema->dictionary;
-      type = binder->dictionary_types[col];
       // A dictionary index may point at a null value in the dictionary itself.
       is_null = ArrowArrayViewIsNull(view, row) != 0;
     }
@@ -476,7 +471,7 @@ AdbcStatusCode InternalAdbcSqliteBinderBindNext(struct AdbcSqliteBinder* binder,
           break;
         }
         default:
-          if (binder->types[col] == NANOARROW_TYPE_DICTIONARY) {
+          if (binder->schema.children[col]->dictionary != NULL) {
             InternalAdbcSetError(error, "Column %d dictionary has unsupported type %s",
                                  col, ArrowTypeString(type));
           } else {
@@ -508,9 +503,6 @@ void InternalAdbcSqliteBinderRelease(struct AdbcSqliteBinder* binder) {
   }
   if (binder->types) {
     free(binder->types);
-  }
-  if (binder->dictionary_types) {
-    free(binder->dictionary_types);
   }
   if (binder->param_indices) {
     free(binder->param_indices);

@@ -990,6 +990,23 @@ static inline ArrowErrorCode MakeCopyFieldWriter(
   struct ArrowSchemaView schema_view;
   NANOARROW_RETURN_NOT_OK(ArrowSchemaViewInit(&schema_view, schema, error));
 
+  // Resolve dictionary encoding before the target-type-specific dispatch below,
+  // so that any value type supported for a plain column is also supported when
+  // dictionary-encoded: build a writer for the dictionary's value type and
+  // delegate to it. PostgresType::FromSchema likewise resolves a dictionary to
+  // its value type, so target_type already refers to the value type and is
+  // passed through unchanged.
+  if (schema_view.type == NANOARROW_TYPE_DICTIONARY) {
+    std::unique_ptr<PostgresCopyFieldWriter> value_writer;
+    NANOARROW_RETURN_NOT_OK(MakeCopyFieldWriter(schema->dictionary,
+                                                array_view->dictionary, type_resolver,
+                                                target_type, &value_writer, error));
+
+    using T = PostgresCopyDictionaryFieldWriter;
+    *out = T::Create<T>(array_view, std::move(value_writer));
+    return NANOARROW_OK;
+  }
+
   const bool is_arrow_json =
       schema_view.extension_name.data != nullptr &&
       std::string_view(schema_view.extension_name.data,
@@ -1173,21 +1190,6 @@ static inline ArrowErrorCode MakeCopyFieldWriter(
           break;
         }
       }
-      return NANOARROW_OK;
-    }
-    case NANOARROW_TYPE_DICTIONARY: {
-      // Build a writer for the dictionary's value type and delegate to it, so
-      // that any value type supported for a plain column is also supported when
-      // dictionary-encoded. PostgresType::FromSchema likewise resolves a
-      // dictionary to its value type, so target_type already refers to the
-      // value type and is passed through unchanged.
-      std::unique_ptr<PostgresCopyFieldWriter> value_writer;
-      NANOARROW_RETURN_NOT_OK(MakeCopyFieldWriter(schema->dictionary,
-                                                  array_view->dictionary, type_resolver,
-                                                  target_type, &value_writer, error));
-
-      using T = PostgresCopyDictionaryFieldWriter;
-      *out = T::Create<T>(array_view, std::move(value_writer));
       return NANOARROW_OK;
     }
     case NANOARROW_TYPE_LIST:
