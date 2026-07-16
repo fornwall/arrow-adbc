@@ -1013,16 +1013,28 @@ pub(crate) fn parse_driver_uri(uri: &'_ str) -> Result<DriverLocator<'_>> {
         return Ok(DriverLocator::Uri(uri, ""));
     }
 
-    if &uri[idx..idx + 2] == ":/" {
+    // `idx` (the colon) and `idx + 1` are always valid char boundaries because
+    // `:` is a single byte. Operate on the remainder `&uri[idx..]` using
+    // boundary-safe operations so multi-byte UTF-8 after the colon cannot cause
+    // a slicing panic.
+    let rest = &uri[idx..];
+    if rest.starts_with(":/") {
         // scheme is also driver
-        if driver == "profile" && uri.len() > idx + 2 {
-            // Check if it's "://" (two slashes) or just ":/" (one slash)
-            if uri.len() > idx + 3 && &uri[idx + 2..idx + 3] == "/" {
-                // It's "profile://..." - skip "://" (three characters)
-                return Ok(DriverLocator::Profile(&uri[idx + 3..]));
+        if driver == "profile" {
+            // Check if it's "://" (two slashes) or just ":/" (one slash).
+            // Only strip "://" when there is a non-empty remainder after it,
+            // matching the original `uri.len() > idx + 3` guard: a bare
+            // "profile://" keeps the trailing slash via the ":/" branch below.
+            if let Some(profile) = rest.strip_prefix("://") {
+                if !profile.is_empty() {
+                    // It's "profile://..." - skip "://" (three characters)
+                    return Ok(DriverLocator::Profile(profile));
+                }
             }
             // It's "profile:/..." - skip ":/" (two characters)
-            return Ok(DriverLocator::Profile(&uri[idx + 2..]));
+            if let Some(profile) = rest.strip_prefix(":/") {
+                return Ok(DriverLocator::Profile(profile));
+            }
         }
         return Ok(DriverLocator::Uri(driver, uri));
     }
@@ -1648,6 +1660,30 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_parse_driver_uri_non_ascii_no_panic() {
+        // Regression: multi-byte UTF-8 immediately after the scheme colon used
+        // to cause a char-boundary slicing panic. The parser must return a
+        // value (Ok or Err) rather than panic.
+
+        // `db:é...` does not start with `:/`, so it is treated as a driver URI.
+        let DriverLocator::Uri(driver, conn) =
+            parse_driver_uri("db:éxxx").expect("Expected Ok result")
+        else {
+            panic!("Expected DriverLocator::Uri result");
+        };
+        assert_eq!(driver, "db");
+        assert_eq!(conn, "éxxx");
+
+        // `profile:/€x` starts with `:/` (not `://`), so it is a profile path.
+        let DriverLocator::Profile(profile) =
+            parse_driver_uri("profile:/€x").expect("Expected Ok result")
+        else {
+            panic!("Expected DriverLocator::Profile result");
+        };
+        assert_eq!(profile, "€x");
     }
 
     #[test]
