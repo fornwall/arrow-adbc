@@ -218,3 +218,25 @@ jobs:
             echo "Checking package '$dir'"
             cargo msrv verify --manifest-path "$dir" || exit 1
           done
+
+  # Runs the adbc_ffi tests under Miri to catch aliasing/UB in the FFI exporter
+  # shims (e.g. the sanctioned cancel-during-execute concurrency, which ordinary
+  # tests cannot detect). Scoped to adbc_ffi for now; widen if it proves fast
+  # enough.
+  miri:
+    name: Rust Miri (adbc_ffi)
+    runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: 0
+      RUSTFLAGS: "-Adead_code" # TODO(alexandreyc): remove this line when implementation is complete
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Install nightly Rust with Miri
+        run: |
+          rustup toolchain install nightly --component miri --no-self-update
+          rustup default nightly
+      - name: Miri test (adbc_ffi)
+        working-directory: rust
+        run: cargo miri test -p adbc_ffi
