@@ -41,6 +41,10 @@ pub enum ClientError {
   Arrow(#[from] arrow_schema::ArrowError),
   #[error("Other Error: {0}")]
   Other(String),
+  /// The per-object mutex is currently held by an in-flight async operation.
+  /// Used by synchronous setters that `try_lock` to avoid blocking the JS event loop.
+  #[error("{0}")]
+  Busy(String),
 }
 
 pub type Result<T> = std::result::Result<T, ClientError>;
@@ -150,10 +154,15 @@ impl AdbcConnectionCore {
   }
 
   pub fn set_option(&self, key: &str, value: &str) -> Result<()> {
-    let mut conn = self
-      .inner
-      .lock()
-      .map_err(|e| ClientError::Other(e.to_string()))?;
+    // Synchronous setter invoked on the JS main thread: use `try_lock` so we never
+    // block the Node event loop while an async operation holds the connection mutex
+    // on a worker thread. Report the contended case as a `Busy` error instead.
+    let mut conn = self.inner.try_lock().map_err(|e| match e {
+      std::sync::TryLockError::WouldBlock => {
+        ClientError::Busy("connection is busy with another operation".to_string())
+      }
+      std::sync::TryLockError::Poisoned(e) => ClientError::Other(e.to_string()),
+    })?;
     conn.set_option(
       OptionConnection::Other(key.to_string()),
       OptionValue::String(value.to_string()),
