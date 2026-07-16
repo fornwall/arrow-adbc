@@ -348,6 +348,7 @@ impl AdbcResultIteratorCore {
 pub struct ChannelBatchReader {
   schema: SchemaRef,
   receiver: mpsc::Receiver<Vec<u8>>,
+  current: Option<StreamReader<std::io::Cursor<Vec<u8>>>>,
 }
 
 impl ChannelBatchReader {
@@ -355,7 +356,11 @@ impl ChannelBatchReader {
     let ipc_reader = StreamReader::try_new(std::io::Cursor::new(schema_bytes), None)
       .map_err(ClientError::Arrow)?;
     let schema = ipc_reader.schema();
-    Ok(Self { schema, receiver })
+    Ok(Self {
+      schema,
+      receiver,
+      current: None,
+    })
   }
 }
 
@@ -363,16 +368,29 @@ impl Iterator for ChannelBatchReader {
   type Item = std::result::Result<arrow_array::RecordBatch, arrow_schema::ArrowError>;
 
   fn next(&mut self) -> Option<Self::Item> {
-    let bytes = self.receiver.recv().ok()?;
-    let mut ipc_reader = match StreamReader::try_new(std::io::Cursor::new(bytes), None) {
-      Ok(r) => r,
-      Err(e) => return Some(Err(e)),
-    };
-    match ipc_reader.next() {
-      Some(result) => Some(result),
-      None => Some(Err(arrow_schema::ArrowError::IpcError(
-        "Received IPC stream with no record batches".to_string(),
-      ))),
+    loop {
+      // Drain all batches from the reader currently in progress before
+      // pulling the next buffer off the channel. Without this, any record
+      // batch after the first in a received IPC buffer would be silently
+      // dropped.
+      if let Some(reader) = self.current.as_mut() {
+        match reader.next() {
+          Some(result) => return Some(result),
+          None => {
+            // This buffer is fully drained; fetch the next one.
+            self.current = None;
+          }
+        }
+      }
+
+      let bytes = self.receiver.recv().ok()?;
+      match StreamReader::try_new(std::io::Cursor::new(bytes), None) {
+        // Store the reader and loop back to drain it. Empty buffers (a
+        // reader that yields no batches) are skipped, while genuine decode
+        // errors are still surfaced below.
+        Ok(reader) => self.current = Some(reader),
+        Err(e) => return Some(Err(e)),
+      }
     }
   }
 }
