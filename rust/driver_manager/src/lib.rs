@@ -1137,6 +1137,18 @@ struct ManagedStatementInner {
     statement: Mutex<adbc_ffi::FFI_AdbcStatement>,
     connection: Arc<ManagedConnectionInner>,
 }
+
+impl Drop for ManagedStatementInner {
+    fn drop(&mut self) {
+        let driver = &self.connection.database.driver.driver;
+        let mut statement = self.statement.lock().unwrap();
+        let method = driver_method!(driver, StatementRelease);
+        // TODO(alexandreyc): how should we handle `StatementRelease` failing?
+        // See: https://github.com/apache/arrow-adbc/pull/1742#discussion_r1574388409
+        unsafe { method(statement.deref_mut(), null_mut()) };
+    }
+}
+
 /// Implementation of [Statement].
 #[derive(Clone)]
 pub struct ManagedStatement {
@@ -1372,13 +1384,3 @@ impl Optionable for ManagedStatement {
     }
 }
 
-impl Drop for ManagedStatement {
-    fn drop(&mut self) {
-        let driver = self.ffi_driver();
-        let mut statement = self.inner.statement.lock().unwrap();
-        let method = driver_method!(driver, StatementRelease);
-        // TODO(alexandreyc): how should we handle `StatementRelease` failing?
-        // See: https://github.com/apache/arrow-adbc/pull/1742#discussion_r1574388409
-        unsafe { method(statement.deref_mut(), null_mut()) };
-    }
-}
