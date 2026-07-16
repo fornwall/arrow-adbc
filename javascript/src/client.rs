@@ -187,10 +187,7 @@ impl AdbcConnectionCore {
       opts.column_name.as_deref(),
     )?;
 
-    Ok(AdbcResultIteratorCore {
-      reader,
-      exhausted: false,
-    })
+    Ok(AdbcResultIteratorCore::new(reader))
   }
 
   pub fn get_table_schema(&self, opts: GetTableSchemaOptions) -> Result<Vec<u8>> {
@@ -217,10 +214,7 @@ impl AdbcConnectionCore {
       .map_err(|e| ClientError::Other(e.to_string()))?;
     let reader = conn.get_table_types()?;
 
-    Ok(AdbcResultIteratorCore {
-      reader,
-      exhausted: false,
-    })
+    Ok(AdbcResultIteratorCore::new(reader))
   }
 
   pub fn get_info(&self, info_codes: Option<Vec<u32>>) -> Result<AdbcResultIteratorCore> {
@@ -235,10 +229,7 @@ impl AdbcConnectionCore {
     });
     let reader = conn.get_info(codes)?;
 
-    Ok(AdbcResultIteratorCore {
-      reader,
-      exhausted: false,
-    })
+    Ok(AdbcResultIteratorCore::new(reader))
   }
 
   pub fn commit(&self) -> Result<()> {
@@ -281,10 +272,7 @@ impl AdbcStatementCore {
   pub fn execute_query(&mut self) -> Result<AdbcResultIteratorCore> {
     let reader = self.inner.execute()?;
 
-    Ok(AdbcResultIteratorCore {
-      reader,
-      exhausted: false,
-    })
+    Ok(AdbcResultIteratorCore::new(reader))
   }
 
   pub fn execute_update(&mut self) -> Result<i64> {
@@ -322,24 +310,62 @@ impl AdbcStatementCore {
 
 pub struct AdbcResultIteratorCore {
   reader: Box<dyn RecordBatchReader + Send>,
+  /// Persistent IPC stream writer, created lazily on the first `next()` call so the
+  /// schema is emitted exactly once. The first returned buffer contains the schema
+  /// header plus the first record batch; each later buffer contains only its record
+  /// batch. Concatenated, the buffers form a single valid IPC stream, so the JS-side
+  /// `RecordBatchReader.from()` decoder (which concatenates the per-`next()` chunks)
+  /// reads every batch.
+  writer: Option<StreamWriter<Vec<u8>>>,
   exhausted: bool,
 }
 
 impl AdbcResultIteratorCore {
+  fn new(reader: Box<dyn RecordBatchReader + Send>) -> Self {
+    Self {
+      reader,
+      writer: None,
+      exhausted: false,
+    }
+  }
+
+  /// Returns the IPC bytes for the next record batch, or `Ok(None)` when the reader is
+  /// exhausted. Only a single batch is materialized per call, so large result sets are
+  /// streamed rather than buffered into one contiguous IPC buffer (which risked OOM).
   pub fn next(&mut self) -> Result<Option<Vec<u8>>> {
     if self.exhausted {
       return Ok(None);
     }
-    self.exhausted = true;
 
-    let schema = self.reader.schema();
-    let mut output = Vec::new();
-    let mut writer = StreamWriter::try_new(&mut output, &schema)?;
-    for batch in self.reader.by_ref() {
-      writer.write(&batch?)?;
+    // Create the writer lazily so the schema message is written to the front of the
+    // first buffer, even for an empty result set (which then yields a schema-only
+    // stream, matching the previous behavior).
+    if self.writer.is_none() {
+      let schema = self.reader.schema();
+      self.writer = Some(StreamWriter::try_new(Vec::new(), &schema)?);
     }
-    writer.finish()?;
-    Ok(Some(output))
+    let writer = self.writer.as_mut().expect("writer initialized above");
+
+    match self.reader.next() {
+      Some(batch) => {
+        // Propagate an `arrow_schema::ArrowError` as `ClientError::Arrow` via `?`.
+        writer.write(&batch?)?;
+        // Drain only this batch's bytes; the writer keeps streaming into a fresh buffer.
+        Ok(Some(std::mem::take(writer.get_mut())))
+      }
+      None => {
+        self.exhausted = true;
+        if writer.get_ref().is_empty() {
+          // Batches were already streamed out on previous calls; nothing remains.
+          Ok(None)
+        } else {
+          // Empty result set: finish the schema-only stream (writes the end-of-stream
+          // marker) and emit it so the consumer still observes the result schema.
+          writer.finish()?;
+          Ok(Some(std::mem::take(writer.get_mut())))
+        }
+      }
+    }
   }
 }
 
