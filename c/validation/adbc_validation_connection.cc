@@ -140,6 +140,32 @@ void ConnectionTest::TestAutocommitToggle() {
               IsOkStatus(&error));
 }
 
+void ConnectionTest::TestAutocommitIntRoundTrip() {
+  if (!quirks()->supports_get_option()) {
+    GTEST_SKIP();
+  }
+
+  ASSERT_THAT(AdbcConnectionNew(&connection, &error), IsOkStatus(&error));
+  ASSERT_THAT(AdbcConnectionInit(&connection, &database, &error), IsOkStatus(&error));
+
+  // Drivers are not required to accept an integer value for the
+  // (string-typed) autocommit option, but a driver that accepts a value via
+  // SetOptionInt must also support reading it back via GetOptionInt.
+  AdbcStatusCode set_status = AdbcConnectionSetOptionInt(
+      &connection, ADBC_CONNECTION_OPTION_AUTOCOMMIT, 1, &error);
+  if (set_status != ADBC_STATUS_OK) {
+    if (error.release) error.release(&error);
+    GTEST_SKIP() << "Driver does not accept an integer value for "
+                 << ADBC_CONNECTION_OPTION_AUTOCOMMIT;
+  }
+
+  int64_t value = -1;
+  ASSERT_THAT(AdbcConnectionGetOptionInt(&connection, ADBC_CONNECTION_OPTION_AUTOCOMMIT,
+                                         &value, &error),
+              IsOkStatus(&error));
+  ASSERT_EQ(1, value);
+}
+
 //------------------------------------------------------------
 // Tests of metadata
 
