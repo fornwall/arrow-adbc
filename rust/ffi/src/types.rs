@@ -633,10 +633,21 @@ unsafe extern "C" fn release_ffi_error_v100(error: *mut FFI_AdbcErrorV100) {
     }
 }
 
+/// Error detail key carrying the driver's original `vendor_code`.
+///
+/// The 1.1.0 error layout requires `AdbcError.vendor_code` to hold the
+/// `ADBC_ERROR_VENDOR_CODE_PRIVATE_DATA` sentinel while `private_data` is in
+/// use, which destroys the driver's actual vendor code for 1.1.0 consumers.
+/// [`export_error`] therefore forwards a meaningful vendor code (nonzero and
+/// not the sentinel) as an additional error detail under this key, with the
+/// value encoded as the code's decimal string in UTF-8 (readable via
+/// `AdbcErrorGetDetail`).
+pub const ERR_DETAIL_VENDOR_CODE: &str = "adbc.error.vendor_code";
+
 /// Export an error into an FFI error, accounting for the v1.0.0/v1.1.0 ABI
 /// extension.
 #[doc(hidden)]
-pub unsafe fn export_error(err_out: *mut FFI_AdbcError, error: Error) {
+pub unsafe fn export_error(err_out: *mut FFI_AdbcError, mut error: Error) {
     if err_out.is_null() {
         return;
     }
@@ -646,6 +657,17 @@ pub unsafe fn export_error(err_out: *mut FFI_AdbcError, error: Error) {
         release(err_out);
     }
     if is_v110 {
+        // The 1.1.0 layout overwrites `vendor_code` with the sentinel below, so
+        // preserve a meaningful vendor code as an error detail instead.
+        if error.vendor_code != 0
+            && error.vendor_code != constants::ADBC_ERROR_VENDOR_CODE_PRIVATE_DATA
+        {
+            let detail = (
+                ERR_DETAIL_VENDOR_CODE.to_string(),
+                error.vendor_code.to_string().into_bytes(),
+            );
+            error.details.get_or_insert_default().push(detail);
+        }
         let mut ffi_error = FFI_AdbcError::try_from(error).unwrap_or_else(Into::into);
         ffi_error.vendor_code = constants::ADBC_ERROR_VENDOR_CODE_PRIVATE_DATA;
         ffi_error.private_driver = (*err_out).private_driver;
@@ -853,6 +875,118 @@ mod tests {
         assert!(out.message.is_null());
         assert!(out.private_data.is_null());
         // Drop here is a no-op because release is None.
+    }
+
+    #[test]
+    fn test_set_error_out_extended_layout_forwards_vendor_code_as_detail() {
+        // The 1.1.0 layout must overwrite `vendor_code` with the sentinel, which
+        // would destroy the driver's actual vendor code. It is forwarded as an
+        // error detail instead, readable through the same functions the exporter
+        // installs as `ErrorGetDetailCount`/`ErrorGetDetail` (`AdbcErrorGetDetail`
+        // from C).
+        use crate::driver_exporter::{error_get_detail, error_get_detail_count};
+
+        let mut out = FFI_AdbcError {
+            message: null_mut(),
+            vendor_code: constants::ADBC_ERROR_VENDOR_CODE_PRIVATE_DATA,
+            sqlstate: [0; 5],
+            release: None,
+            private_data: null_mut(),
+            private_driver: null(),
+        };
+
+        let error = Error {
+            message: "boom".into(),
+            status: Status::IO,
+            vendor_code: 10,
+            sqlstate: [0; 5],
+            details: Some(vec![("key".to_string(), b"value".to_vec())]),
+        };
+        unsafe { export_error(&mut out, error) };
+
+        // The spec-mandated sentinel is still in place...
+        assert_eq!(
+            out.vendor_code,
+            constants::ADBC_ERROR_VENDOR_CODE_PRIVATE_DATA
+        );
+
+        // ...while a 1.1.0 consumer can recover the vendor code via the details
+        // API. Pre-existing details are preserved alongside it.
+        let num_details = unsafe { error_get_detail_count(&out) };
+        assert_eq!(num_details, 2);
+        let details: Vec<(String, Vec<u8>)> = (0..num_details)
+            .map(|i| unsafe { error_get_detail(&out, i) })
+            .map(|d| unsafe {
+                (
+                    CStr::from_ptr(d.key).to_string_lossy().to_string(),
+                    std::slice::from_raw_parts(d.value, d.value_length).to_vec(),
+                )
+            })
+            .collect();
+        assert_eq!(details[0], ("key".to_string(), b"value".to_vec()));
+        assert_eq!(
+            details[1],
+            (ERR_DETAIL_VENDOR_CODE.to_string(), b"10".to_vec())
+        );
+
+        unsafe { (out.release.unwrap())(&mut out) };
+    }
+
+    #[test]
+    fn test_set_error_out_extended_layout_skips_meaningless_vendor_codes() {
+        // A zero vendor code (the "unset" convention) or one already holding the
+        // sentinel carries no information, so no detail is synthesized.
+        use crate::driver_exporter::error_get_detail_count;
+
+        for vendor_code in [0, constants::ADBC_ERROR_VENDOR_CODE_PRIVATE_DATA] {
+            let mut out = FFI_AdbcError {
+                message: null_mut(),
+                vendor_code: constants::ADBC_ERROR_VENDOR_CODE_PRIVATE_DATA,
+                sqlstate: [0; 5],
+                release: None,
+                private_data: null_mut(),
+                private_driver: null(),
+            };
+            let error = Error {
+                message: "boom".into(),
+                status: Status::Internal,
+                vendor_code,
+                sqlstate: [0; 5],
+                details: None,
+            };
+            unsafe { export_error(&mut out, error) };
+
+            assert_eq!(unsafe { error_get_detail_count(&out) }, 0);
+
+            unsafe { (out.release.unwrap())(&mut out) };
+        }
+    }
+
+    #[test]
+    fn test_set_error_out_v100_layout_keeps_vendor_code_in_place() {
+        // A 1.0.0-layout caller still receives the vendor code in `vendor_code`
+        // itself; no detail machinery is involved on that path.
+        let mut out = FFI_AdbcError {
+            message: null_mut(),
+            vendor_code: 0,
+            sqlstate: [0; 5],
+            release: None,
+            private_data: null_mut(),
+            private_driver: null(),
+        };
+        let error = Error {
+            message: "boom".into(),
+            status: Status::IO,
+            vendor_code: 10,
+            sqlstate: [0; 5],
+            details: None,
+        };
+        unsafe { export_error(&mut out, error) };
+
+        assert_eq!(out.vendor_code, 10);
+        assert!(out.private_data.is_null());
+
+        unsafe { (out.release.unwrap())(&mut out) };
     }
 
     #[test]
