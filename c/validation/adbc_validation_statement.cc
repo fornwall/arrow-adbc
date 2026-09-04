@@ -18,6 +18,7 @@
 #include "adbc_validation.h"
 
 #include <cstring>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -32,6 +33,37 @@
 #include "common/options.h"
 
 namespace adbc_validation {
+
+namespace {
+
+template <typename T>
+constexpr bool kIsListValue = false;
+template <typename T>
+constexpr bool kIsListValue<std::vector<T>> = true;
+
+/// \brief Apply the backend's canonical form for null and empty lists to the
+///   values a test expects to read back.
+template <typename CType>
+void NormalizeNullLists(NullListForm form, std::vector<std::optional<CType>>* values) {
+  if constexpr (kIsListValue<CType>) {
+    switch (form) {
+      case NullListForm::kDistinct:
+        break;
+      case NullListForm::kNullAsEmpty:
+        for (auto& value : *values) {
+          if (!value.has_value()) value.emplace();
+        }
+        break;
+      case NullListForm::kEmptyAsNull:
+        for (auto& value : *values) {
+          if (value.has_value() && value->empty()) value.reset();
+        }
+        break;
+    }
+  }
+}
+
+}  // namespace
 
 void StatementTest::SetUpTest() {
   std::memset(&error, 0, sizeof(error));
@@ -176,9 +208,13 @@ void StatementTest::TestSqlIngestType(SchemaField field,
     ASSERT_EQ(1, reader.array->n_children);
 
     if (round_trip_field.type == field.type) {
+      std::vector<std::optional<CType>> expected_values = values;
+      if (field.type == NANOARROW_TYPE_LIST || field.type == NANOARROW_TYPE_LARGE_LIST) {
+        NormalizeNullLists(quirks()->null_list_form(), &expected_values);
+      }
       // XXX: for now we can't compare values; we would need casting
       ASSERT_NO_FATAL_FAILURE(
-          CompareArray<CType>(reader.array_view->children[0], values));
+          CompareArray<CType>(reader.array_view->children[0], expected_values));
     }
 
     ASSERT_NO_FATAL_FAILURE(reader.Next());
@@ -558,7 +594,9 @@ void StatementTest::TestSqlIngestListOfInt32() {
   SchemaField field =
       SchemaField::Nested("col", NANOARROW_TYPE_LIST, {{"item", NANOARROW_TYPE_INT32}});
   ASSERT_NO_FATAL_FAILURE(TestSqlIngestType<std::vector<int32_t>>(
-      field, {std::nullopt, std::vector<int32_t>{1, 2, 3}, std::vector<int32_t>{4, 5}},
+      field,
+      {std::nullopt, std::vector<int32_t>{}, std::vector<int32_t>{1, 2, 3},
+       std::vector<int32_t>{4, 5}},
       /*dictionary_encode*/ false));
 }
 
@@ -567,7 +605,7 @@ void StatementTest::TestSqlIngestListOfString() {
       SchemaField::Nested("col", NANOARROW_TYPE_LIST, {{"item", NANOARROW_TYPE_STRING}});
   ASSERT_NO_FATAL_FAILURE(TestSqlIngestType<std::vector<std::string>>(
       field,
-      {std::nullopt, std::vector<std::string>{"abc", "defg"},
+      {std::nullopt, std::vector<std::string>{}, std::vector<std::string>{"abc", "defg"},
        std::vector<std::string>{"hijk"}},
       /*dictionary_encode*/ false));
 }
