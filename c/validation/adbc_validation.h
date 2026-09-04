@@ -36,6 +36,19 @@ namespace adbc_validation {
 
 using SqlInfoValue = std::variant<std::string, int64_t>;
 
+/// \brief How a backend stores a list whose top-level value is null.
+///
+/// Arrow distinguishes a null list from an empty list, but some backends
+/// cannot represent both and collapse one into the other on ingest.
+enum class NullListForm {
+  /// Null lists and empty lists are distinct values and round-trip exactly.
+  kDistinct,
+  /// Null lists are stored and read back as empty lists (e.g. BigQuery).
+  kNullAsEmpty,
+  /// Empty lists are stored and read back as null (e.g. Cassandra).
+  kEmptyAsNull,
+};
+
 /// \brief Configuration for driver-specific behavior.
 class DriverQuirks {
  public:
@@ -190,6 +203,12 @@ class DriverQuirks {
 
     return out;
   }
+
+  /// \brief The canonical form a backend stores null and empty lists in.
+  ///
+  /// Ingest tests always supply null list input; the values they expect to
+  /// read back are normalized to this form before comparison.
+  virtual NullListForm null_list_form() const { return NullListForm::kDistinct; }
 
   /// \brief Whether bulk ingest is supported
   virtual bool supports_bulk_ingest(const char* mode) const { return true; }
