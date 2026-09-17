@@ -38,6 +38,7 @@ fn to_napi_err(err: ClientError) -> Error {
     ClientError::Adbc(e) => Error::new(Status::GenericFailure, e.message),
     ClientError::Arrow(e) => Error::new(Status::GenericFailure, format!("Arrow Error: {e}")),
     ClientError::Other(e) => Error::new(Status::GenericFailure, format!("Internal Error: {e}")),
+    ClientError::Busy(msg) => Error::new(Status::GenericFailure, msg),
   }
 }
 
@@ -547,9 +548,14 @@ impl _NativeAdbcStatement {
   #[napi]
   pub fn set_sql_query(&self, env: Env, query: String) -> Result<()> {
     let mutex = self.inner.as_ref().ok_or_else(closed_err)?;
-    let mut stmt = mutex
-      .lock()
-      .map_err(|e| Error::from_reason(e.to_string()))?;
+    // Synchronous setter on the JS main thread: `try_lock` so a long-running async
+    // statement operation holding the mutex on a worker thread cannot stall the event loop.
+    let mut stmt = mutex.try_lock().map_err(|e| match e {
+      std::sync::TryLockError::WouldBlock => {
+        Error::new(Status::GenericFailure, "statement is busy with another operation")
+      }
+      std::sync::TryLockError::Poisoned(e) => Error::from_reason(e.to_string()),
+    })?;
     stmt
       .set_sql_query(&query)
       .map_err(|e| sync_adbc_err(e, env))
@@ -558,9 +564,14 @@ impl _NativeAdbcStatement {
   #[napi]
   pub fn set_option(&self, env: Env, key: String, value: String) -> Result<()> {
     let mutex = self.inner.as_ref().ok_or_else(closed_err)?;
-    let mut stmt = mutex
-      .lock()
-      .map_err(|e| Error::from_reason(e.to_string()))?;
+    // Synchronous setter on the JS main thread: `try_lock` so a long-running async
+    // statement operation holding the mutex on a worker thread cannot stall the event loop.
+    let mut stmt = mutex.try_lock().map_err(|e| match e {
+      std::sync::TryLockError::WouldBlock => {
+        Error::new(Status::GenericFailure, "statement is busy with another operation")
+      }
+      std::sync::TryLockError::Poisoned(e) => Error::from_reason(e.to_string()),
+    })?;
     stmt
       .set_option(&key, &value)
       .map_err(|e| sync_adbc_err(e, env))
