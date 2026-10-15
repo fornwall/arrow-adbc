@@ -289,6 +289,67 @@ void ConnectionTest::TestMetadataGetInfo() {
   }
 }
 
+void ConnectionTest::TestMetadataGetInfoAllCodes() {
+  ASSERT_THAT(AdbcConnectionNew(&connection, &error), IsOkStatus(&error));
+  ASSERT_THAT(AdbcConnectionInit(&connection, &database, &error), IsOkStatus(&error));
+
+  if (!quirks()->supports_get_sql_info()) {
+    GTEST_SKIP();
+  }
+
+  // Passing NULL info_codes requests all info codes recognized by the driver.
+  std::vector<uint32_t> all_codes;
+  {
+    StreamReader reader;
+    ASSERT_THAT(
+        AdbcConnectionGetInfo(&connection, /*info_codes=*/nullptr,
+                              /*info_codes_length=*/0, &reader.stream.value, &error),
+        IsOkStatus(&error));
+    ASSERT_NO_FATAL_FAILURE(reader.GetSchema());
+    while (true) {
+      ASSERT_NO_FATAL_FAILURE(reader.Next());
+      if (!reader.array->release) break;
+      for (int64_t row = 0; row < reader.array->length; row++) {
+        ASSERT_FALSE(ArrowArrayViewIsNull(reader.array_view->children[0], row));
+        all_codes.push_back(
+            reader.array_view->children[0]->buffer_views[1].data.as_uint32[row]);
+      }
+    }
+  }
+
+  // Any info code the driver returns for an explicit request is a code it
+  // recognizes, so it must also be present in the all-codes result.
+  for (uint32_t info_code : {
+           ADBC_INFO_VENDOR_NAME,
+           ADBC_INFO_VENDOR_VERSION,
+           ADBC_INFO_VENDOR_ARROW_VERSION,
+           ADBC_INFO_DRIVER_NAME,
+           ADBC_INFO_DRIVER_VERSION,
+           ADBC_INFO_DRIVER_ADBC_VERSION,
+       }) {
+    SCOPED_TRACE("info_code = " + std::to_string(info_code));
+    uint32_t info[] = {info_code};
+
+    StreamReader reader;
+    ASSERT_THAT(AdbcConnectionGetInfo(&connection, info, 1, &reader.stream.value, &error),
+                IsOkStatus(&error));
+    ASSERT_NO_FATAL_FAILURE(reader.GetSchema());
+    while (true) {
+      ASSERT_NO_FATAL_FAILURE(reader.Next());
+      if (!reader.array->release) break;
+      for (int64_t row = 0; row < reader.array->length; row++) {
+        ASSERT_FALSE(ArrowArrayViewIsNull(reader.array_view->children[0], row));
+        const uint32_t code =
+            reader.array_view->children[0]->buffer_views[1].data.as_uint32[row];
+        EXPECT_THAT(all_codes, ::testing::Contains(code))
+            << "info code " << code
+            << " is returned for an explicit request but missing from the "
+               "all-codes GetInfo result";
+      }
+    }
+  }
+}
+
 void ConnectionTest::TestMetadataGetTableSchema() {
   if (!quirks()->supports_bulk_ingest(ADBC_INGEST_OPTION_MODE_CREATE)) {
     GTEST_SKIP();

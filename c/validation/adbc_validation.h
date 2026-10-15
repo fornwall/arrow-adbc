@@ -309,6 +309,7 @@ class ConnectionTest {
   void TestMetadataCurrentDbSchema();
 
   void TestMetadataGetInfo();
+  void TestMetadataGetInfoAllCodes();
   void TestMetadataGetTableSchema();
   void TestMetadataGetTableSchemaDbSchema();
   void TestMetadataGetTableSchemaEscaping();
@@ -344,6 +345,7 @@ class ConnectionTest {
   TEST_F(FIXTURE, MetadataCurrentCatalog) { TestMetadataCurrentCatalog(); }             \
   TEST_F(FIXTURE, MetadataCurrentDbSchema) { TestMetadataCurrentDbSchema(); }           \
   TEST_F(FIXTURE, MetadataGetInfo) { TestMetadataGetInfo(); }                           \
+  TEST_F(FIXTURE, MetadataGetInfoAllCodes) { TestMetadataGetInfoAllCodes(); }           \
   TEST_F(FIXTURE, MetadataGetTableSchema) { TestMetadataGetTableSchema(); }             \
   TEST_F(FIXTURE, MetadataGetTableSchemaDbSchema) {                                     \
     TestMetadataGetTableSchemaDbSchema();                                               \
