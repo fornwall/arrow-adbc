@@ -275,6 +275,13 @@ class SqliteFlightSqlStatementTest : public ::testing::Test,
   void TestSqlIngestInterval() {
     GTEST_SKIP() << "Cannot ingest Interval (not implemented)";
   }
+  void TestSqlBindNullType() {
+    // The example server introspects the result set to infer a schema, but
+    // cannot determine a column type for "SELECT ?" with a NULL-typed
+    // parameter and silently returns zero rows (its SqlBatchReader does not
+    // materialize columns of unknown/dense-union type).
+    GTEST_SKIP() << "Server does not support NULL-typed result columns";
+  }
   void TestSqlQueryRowsAffectedDelete() {
     GTEST_SKIP() << "Cannot query rows affected in delete (not implemented)";
   }
