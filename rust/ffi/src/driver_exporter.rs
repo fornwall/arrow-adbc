@@ -1899,7 +1899,7 @@ extern "C" fn statement_get_parameter_schema<DriverType: Driver>(
 
 // Error
 
-unsafe extern "C" fn error_get_detail_count(error: *const FFI_AdbcError) -> c_int {
+pub(crate) unsafe extern "C" fn error_get_detail_count(error: *const FFI_AdbcError) -> c_int {
     match error.as_ref() {
         Some(error) if !error.private_data.is_null() => {
             let private_data = error.private_data as *const ErrorPrivateData;
@@ -1913,7 +1913,7 @@ unsafe extern "C" fn error_get_detail_count(error: *const FFI_AdbcError) -> c_in
     }
 }
 
-unsafe extern "C" fn error_get_detail(
+pub(crate) unsafe extern "C" fn error_get_detail(
     error: *const FFI_AdbcError,
     index: c_int,
 ) -> FFI_AdbcErrorDetail {
