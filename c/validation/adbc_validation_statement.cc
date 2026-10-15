@@ -17,6 +17,7 @@
 
 #include "adbc_validation.h"
 
+#include <cctype>
 #include <cstring>
 #include <string>
 #include <utility>
@@ -372,8 +373,18 @@ void StatementTest::TestSqlIngestTemporalType(const char* timezone) {
     GTEST_SKIP();
   }
 
-  ASSERT_THAT(quirks()->DropTable(&connection, "bulk_ingest", &error),
-              IsOkStatus(&error));
+  // Use a distinct table for each subcase to avoid cached metadata from a
+  // table that was just dropped and recreated.
+  std::string name =
+      std::string("bulk_ingest_") + ArrowTypeString(type) + "_" + ArrowTimeUnitString(TU);
+  if (timezone != nullptr) {
+    name += "_";
+    for (const char c : std::string(timezone)) {
+      name += std::isalnum(static_cast<unsigned char>(c)) ? c : '_';
+    }
+  }
+
+  ASSERT_THAT(quirks()->DropTable(&connection, name, &error), IsOkStatus(&error));
 
   Handle<struct ArrowSchema> schema;
   Handle<struct ArrowArray> array;
@@ -391,7 +402,7 @@ void StatementTest::TestSqlIngestTemporalType(const char* timezone) {
 
   ASSERT_THAT(AdbcStatementNew(&connection, &statement, &error), IsOkStatus(&error));
   ASSERT_THAT(AdbcStatementSetOption(&statement, ADBC_INGEST_OPTION_TARGET_TABLE,
-                                     "bulk_ingest", &error),
+                                     name.c_str(), &error),
               IsOkStatus(&error));
   ASSERT_THAT(AdbcStatementBind(&statement, &array.value, &schema.value, &error),
               IsOkStatus(&error));
@@ -404,7 +415,7 @@ void StatementTest::TestSqlIngestTemporalType(const char* timezone) {
 
   std::string select_query = quirks()->RewriteSql(
       "StatementTest::TestSqlIngestTemporalType::select-bulk-ingest",
-      "SELECT * FROM " + quirks()->QuoteIdentifier("bulk_ingest") + " ORDER BY " +
+      "SELECT * FROM " + quirks()->QuoteIdentifier(name) + " ORDER BY " +
           quirks()->QuoteIdentifier("col") + " ASC NULLS FIRST");
   ASSERT_THAT(AdbcStatementSetSqlQuery(&statement, select_query.c_str(), &error),
               IsOkStatus(&error));
