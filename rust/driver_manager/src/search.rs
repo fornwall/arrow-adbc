@@ -1013,16 +1013,21 @@ pub(crate) fn parse_driver_uri(uri: &'_ str) -> Result<DriverLocator<'_>> {
         return Ok(DriverLocator::Uri(uri, ""));
     }
 
-    if &uri[idx..idx + 2] == ":/" {
+    // `:` is a single byte, so `idx` is a char boundary and the remainder can be
+    // matched with prefix operations that never split a multi-byte character.
+    let rest = &uri[idx..];
+    if rest.starts_with(":/") {
         // scheme is also driver
-        if driver == "profile" && uri.len() > idx + 2 {
-            // Check if it's "://" (two slashes) or just ":/" (one slash)
-            if uri.len() > idx + 3 && &uri[idx + 2..idx + 3] == "/" {
-                // It's "profile://..." - skip "://" (three characters)
-                return Ok(DriverLocator::Profile(&uri[idx + 3..]));
+        if driver == "profile" {
+            if let Some(profile) = rest.strip_prefix("://") {
+                // A bare "profile://" falls through to keep its trailing slash.
+                if !profile.is_empty() {
+                    return Ok(DriverLocator::Profile(profile));
+                }
             }
-            // It's "profile:/..." - skip ":/" (two characters)
-            return Ok(DriverLocator::Profile(&uri[idx + 2..]));
+            if let Some(profile) = rest.strip_prefix(":/") {
+                return Ok(DriverLocator::Profile(profile));
+            }
         }
         return Ok(DriverLocator::Uri(driver, uri));
     }
@@ -1648,6 +1653,27 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_parse_driver_uri_non_ascii_no_panic() {
+        // Multi-byte UTF-8 right after the scheme colon used to panic on a
+        // char boundary.
+        let DriverLocator::Uri(driver, conn) =
+            parse_driver_uri("db:éxxx").expect("Expected Ok result")
+        else {
+            panic!("Expected DriverLocator::Uri result");
+        };
+        assert_eq!(driver, "db");
+        assert_eq!(conn, "éxxx");
+
+        // `:/` (not `://`), so this is a profile path.
+        let DriverLocator::Profile(profile) =
+            parse_driver_uri("profile:/€x").expect("Expected Ok result")
+        else {
+            panic!("Expected DriverLocator::Profile result");
+        };
+        assert_eq!(profile, "€x");
     }
 
     #[test]
