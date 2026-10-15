@@ -157,8 +157,15 @@ where
     F: FnMut(*const c_char, *mut c_char, *mut usize, *mut FFI_AdbcError) -> AdbcStatusCode,
 {
     let value = get_option_buffer(key, populate, driver)?;
-    let value = unsafe { CStr::from_ptr(value.as_ptr()) };
-    Ok(value.to_string_lossy().to_string())
+    // `value` is sized to the length the (untrusted) driver reported. Scan for a
+    // NUL terminator only within that bound; never read past `value.len()`.
+    let bytes: &[u8] =
+        unsafe { std::slice::from_raw_parts(value.as_ptr().cast::<u8>(), value.len()) };
+    match CStr::from_bytes_until_nul(bytes) {
+        Ok(cstr) => Ok(cstr.to_string_lossy().into_owned()),
+        // No NUL within the reported length: treat the whole bounded buffer as the string.
+        Err(_) => Ok(String::from_utf8_lossy(bytes).into_owned()),
+    }
 }
 
 pub fn set_option_connection(
